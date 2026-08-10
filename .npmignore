@@ -1,0 +1,10 @@
+src/
+scripts/
+.github/
+AGENTS.md
+agent.md
+FRONTEND_INTEGRATION.md
+sui-codegen.config.ts
+tsconfig.json
+*.tgz
+
