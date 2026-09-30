@@ -39,6 +39,9 @@ export function addDemoPriceInfo(
   config: JitterMarketConfig,
   syIndex: bigint,
 ): TransactionObjectArgument {
+  if (config.adapterKind === "current" || config.currentAdapterPackageId) {
+    throw new Error("Current markets require the Current v2 manifest; a demo quote is not a refresh.");
+  }
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const collector = collectorNew({
     package: config.oraclePackageId,

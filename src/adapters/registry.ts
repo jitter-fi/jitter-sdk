@@ -1,11 +1,13 @@
 import type { JitterMarketConfig } from "../types.js";
 import { demoAdapterManifest } from "./demo.js";
+import { currentAdapterManifest } from "./current.js";
 import { scallopAdapterManifest } from "./scallop.js";
 import type { JitterAdapterKind, JitterAdapterManifest } from "./types.js";
 
 export function detectAdapterKind(
   config: JitterMarketConfig,
 ): JitterAdapterKind | null {
+  if (config.adapterKind === "current" || config.currentAdapterPackageId) return "current";
   if (config.demoMarketVaultObjectId) return "demo";
   if (
     config.scallopAdapterPackageId &&
@@ -31,6 +33,7 @@ export function getJitterAdapterManifest(
   config: JitterMarketConfig,
 ): JitterAdapterManifest {
   const kind = detectAdapterKind(config);
+  if (kind === "current") return currentAdapterManifest;
   if (kind === "demo") return demoAdapterManifest;
   if (kind === "scallop") return scallopAdapterManifest;
 

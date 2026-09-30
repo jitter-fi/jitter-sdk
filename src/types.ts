@@ -104,6 +104,14 @@ export type JitterMarketConfig = {
   naviOracleObjectId?: string;
   naviSuiSystemStateObjectId?: string;
   naviAssetId?: number;
+  /** Current adapter v2 (deposit-first and funded-refresh ABI). */
+  currentAdapterPackageId?: string;
+  currentMarketVaultObjectId?: string;
+  currentProtocolAppObjectId?: string;
+  currentMarketObjectId?: string;
+  currentProtocolTypeTag?: string;
+  currentDecimalsRegistryObjectId?: string;
+  currentXOracleObjectId?: string;
 
   underlyingTypeTag: string;
   syTypeTag: string;

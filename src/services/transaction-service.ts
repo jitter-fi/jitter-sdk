@@ -55,6 +55,8 @@ export type DepositToSyTxParams = {
   underlyingAmount: bigint;
   senderAddress: string;
   syIndex?: bigint;
+  /** Required for Current deposit-first settlement. */
+  minSyOut?: bigint;
 };
 
 export type RedeemSyToUnderlyingTxParams = {
@@ -1311,6 +1313,12 @@ export function createJitterTransactionService(
         underlyingCoinId: params.underlyingCoinId,
         underlyingAmount: params.underlyingAmount,
       });
+      if (adapter.addMintFromUnderlying) {
+        if (params.minSyOut === undefined) throw new Error("Deposit-first settlement requires minSyOut.");
+        const syCoin = adapter.addMintFromUnderlying({ tx, config: options.config, inputCoin: underlyingCoin, minSyOut: params.minSyOut });
+        tx.transferObjects([syCoin], tx.pure.address(params.senderAddress));
+        return tx;
+      }
       const priceInfo = adapter.addPriceInfo({ tx, config: options.config, syIndex });
       const [syCoin, mintRequest] = addMintSyExactIn(
         tx,
@@ -2045,6 +2053,10 @@ function addSyFromUnderlyingExactIn(
   excessCoin?: TransactionObjectArgument;
 } {
   const underlyingCoin = splitUnderlyingCoinExactIn(tx, config, params);
+  if (adapter.addMintFromUnderlying) {
+    // Product routes enforce their final PT/YT/LP minimum output after conversion.
+    return { syCoin: adapter.addMintFromUnderlying({ tx, config, inputCoin: underlyingCoin, minSyOut: 1n }) };
+  }
   const priceInfo = adapter.addPriceInfo({ tx, config, syIndex: params.syIndex });
   const [syCoin, mintRequest] = addMintSyExactIn(
     tx,
@@ -2758,6 +2770,9 @@ async function resolveSyIndex(
 ): Promise<bigint> {
   if (override !== undefined) return override;
   if (options.resolveSyIndex) return options.resolveSyIndex();
+  if (options.config.adapterKind === "current" || options.config.currentAdapterPackageId) {
+    throw new Error("Current transaction hints require syIndex or resolveSyIndex; a demo index is not valid.");
+  }
   return DEFAULT_DEMO_SY_INDEX;
 }
 

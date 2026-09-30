@@ -1,4 +1,5 @@
 /** Primitive PTB builders and adapter/reward helpers. */
+export { addCurrentDepositToSy, addCurrentPriceInfo, addCurrentRedeem } from "../adapters/current.js";
 
 // ---------------------------------------------------------------------------
 // Re-exports (primitive layer)

@@ -4,6 +4,7 @@ import type { JitterMarketConfig } from "../types.js";
 
 export type JitterAdapterKind =
   | "demo"
+  | "current"
   | "scallop"
   | "ember"
   | "suilend"
@@ -50,6 +51,13 @@ export type JitterAdapterManifest = {
   redeemOutputType(config: JitterMarketConfig): string;
   requiredObjectIds(config: JitterMarketConfig): Record<string, string>;
   addPriceInfo(args: AdapterPriceInfoArgs): TransactionObjectArgument;
+  /** Deposit-first adapters mint SY only after receiving actual upstream shares. */
+  addMintFromUnderlying?(args: {
+    tx: Transaction;
+    config: JitterMarketConfig;
+    inputCoin: TransactionObjectArgument;
+    minSyOut: bigint;
+  }): TransactionObjectArgument;
   addDepositToSy(args: AdapterDepositArgs): AdapterDepositResult;
   addRedeemFromSy(args: AdapterRedeemArgs): AdapterRedeemResult;
 };

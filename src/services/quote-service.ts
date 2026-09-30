@@ -591,6 +591,9 @@ async function resolveSyIndex(
   if (options.delegates?.resolveSyIndex) {
     return options.delegates.resolveSyIndex();
   }
+  if (options.config.adapterKind === "current" || options.config.currentAdapterPackageId) {
+    throw new Error("Current previews require an explicit accrued syIndex or resolveSyIndex delegate; stored indices are not fresh quotes.");
+  }
   if (hasScallopRouteConfigured(options.config) && options.network) {
     const scallopIndex = await getScallopMarketIndex(
       options.network,
