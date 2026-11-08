@@ -168,6 +168,7 @@ describe("JitterTransactionService", () => {
     expect(typeof service.buildBuyYtTx).toBe("function");
     expect(typeof service.buildSellYtTx).toBe("function");
     expect(typeof service.buildSellYtForExactSyTx).toBe("function");
+    expect(typeof service.buildBindReferralTx).toBe("function");
     expect(typeof service.buildEnableReferralTx).toBe("function");
     expect(typeof service.buildAddLpTx).toBe("function");
     expect(typeof service.buildAddLpKeepYtTx).toBe("function");
@@ -277,30 +278,30 @@ describe("JitterTransactionService", () => {
 
     expect(collectMoveCalls(buyPtTx)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ module: "router", function: "create_market_state_position" }),
+        expect.objectContaining({ module: "router", function: "create_position" }),
         expect.objectContaining({ module: "router", function: "buy_pt" }),
         expect.objectContaining({
           module: "router",
-          function: "transfer_market_state_position_after_reward_settlement",
+          function: "transfer_position",
         }),
       ]),
     );
     expect(
-      findMoveCall(buyPtTx, "router", "transfer_market_state_position_after_reward_settlement")
+      findMoveCall(buyPtTx, "router", "transfer_position")
         ?.arguments,
     ).toHaveLength(7);
     expect(collectMoveCalls(buyYtTx)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ module: "router", function: "create_market_state_position" }),
+        expect.objectContaining({ module: "router", function: "create_position" }),
         expect.objectContaining({ module: "router", function: "buy_yt" }),
         expect.objectContaining({
           module: "router",
-          function: "transfer_market_state_position_after_reward_settlement",
+          function: "transfer_position",
         }),
       ]),
     );
     expect(
-      findMoveCall(buyYtTx, "router", "transfer_market_state_position_after_reward_settlement")
+      findMoveCall(buyYtTx, "router", "transfer_position")
         ?.arguments,
     ).toHaveLength(7);
   });
@@ -322,16 +323,16 @@ describe("JitterTransactionService", () => {
 
     expect(collectMoveCalls(keepYtTx)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ module: "router", function: "create_market_state_position" }),
+        expect.objectContaining({ module: "router", function: "create_position" }),
         expect.objectContaining({ module: "router", function: "add_lp_keep_yt" }),
         expect.objectContaining({
           module: "router",
-          function: "transfer_market_state_position_after_reward_settlement",
+          function: "transfer_position",
         }),
       ]),
     );
     expect(
-      findMoveCall(keepYtTx, "router", "transfer_market_state_position_after_reward_settlement")
+      findMoveCall(keepYtTx, "router", "transfer_position")
         ?.arguments,
     ).toHaveLength(7);
     expect(
@@ -397,6 +398,59 @@ describe("JitterTransactionService", () => {
         expect.objectContaining({ module: "router", function: "add_lp_keep_yt" }),
       ]),
     );
+  });
+
+  test("full-input mode selects contract-enforced routes for all LP funding paths", async () => {
+    const service = createJitterTransactionService({
+      config: getScallopTestConfig(),
+      resolveSyIndex: async () => DEFAULT_DEMO_SY_INDEX,
+      liquidityInputMode: "full",
+    });
+    const common = {
+      senderAddress,
+      syToMintHint: 0n,
+      minLpOut: 20n,
+      positionId: objectId("41"),
+      rewardSettlement: { strategy: "empty-vector" as const },
+    };
+    const sy = { ...common, inputCoinId: objectId("40"), inputAmount: 100n };
+    const underlying = { ...common, underlyingAmount: 100n };
+    const receipt = { ...common, marketCoinId: objectId("40"), marketCoinAmount: 100n };
+    const keep = [
+      await service.buildAddLpKeepYtTx(sy),
+      await service.buildAddLpKeepYtFromUnderlyingTx(underlying),
+      await service.buildAddLpKeepYtFromMarketCoinTx(receipt),
+    ];
+    const nonKeep = [
+      await service.buildAddLpFromSyTx({ ...sy, minSyOut: 0n }),
+      await service.buildAddLpFromSyFromUnderlyingTx({ ...underlying, minSyOut: 0n }),
+      await service.buildAddLpFromSyFromMarketCoinTx({ ...receipt, minSyOut: 0n }),
+    ];
+    for (const tx of keep) {
+      expect(findMoveCall(tx, "router", "add_lp_keep_yt")?.arguments).toHaveLength(13);
+    }
+    for (const tx of nonKeep) {
+      expect(findMoveCall(tx, "router", "add_lp_from_sy")?.arguments).toHaveLength(14);
+    }
+    for (const tx of [...keep, ...nonKeep]) {
+      expect(collectMoveCalls(tx).filter((call) => call.module === "reward_distributor"
+        && call.function === "finish_operation")).toHaveLength(6);
+    }
+  });
+
+  test("Keep YT preserves its ABI and enforces the YT minimum with an atomic position guard", async () => {
+    const service = createJitterTransactionService({ config: getTestConfig(), resolveSyIndex: () => DEFAULT_DEMO_SY_INDEX });
+    const tx = await service.buildAddLpKeepYtTx({ senderAddress, inputCoinId: objectId("40"),
+      inputAmount: 100n, syToMintHint: 0n, minLpOut: 1n, minYtOut: 1n,
+      rewardSettlement: { strategy: "empty-vector" } });
+    const calls = collectMoveCalls(tx);
+    const before = calls.findIndex(call => call.module === "jitter_position" && call.function === "yt_balance");
+    const route = calls.findIndex(call => call.module === "router" && call.function === "add_lp_keep_yt");
+    const guard = calls.findIndex(call => call.module === "router" && call.function === "assert_yt_delta_at_least");
+    expect(before).toBeGreaterThanOrEqual(0);
+    expect(route).toBeGreaterThan(before);
+    expect(guard).toBeGreaterThan(route);
+    expect(findMoveCall(tx, "router", "add_lp_keep_yt")?.arguments).toHaveLength(13);
   });
 
   test("builds core gate settlements when a distributor is bound without rewarders", async () => {
@@ -465,7 +519,20 @@ describe("JitterTransactionService", () => {
     expect(txData).not.toContain(suiCoinId);
   });
 
-  test("rejects PT orderbook hybrid routes while MarketState router keeps orderbook experimental", async () => {
+  test("recognizes Registry-normalized SUI for native funding without a coin id", async () => {
+    const service = createJitterTransactionService({
+      config: {...getScallopTestConfig(), underlyingTypeTag: `${objectId("02")}::sui::SUI`},
+      resolveSyIndex: async () => DEFAULT_DEMO_SY_INDEX,
+    });
+    const tx = await service.buildAddLpFromSyFromUnderlyingTx({
+      senderAddress, underlyingAmount: 100n, syToMintHint: 60n,
+      minLpOut: 20n, minSyOut: 1n, positionId: objectId("45"),
+      rewardSettlement: {strategy: "empty-vector"},
+    });
+    expect(stringifyTransactionData(tx)).toContain("CoinWithBalance");
+  });
+
+  test("rejects PT orderbook hybrid routes while Market router keeps orderbook experimental", async () => {
     const service = createJitterTransactionService({
       config: getTestConfig(),
       resolveSyIndex: async () => DEFAULT_DEMO_SY_INDEX,
@@ -620,13 +687,24 @@ describe("JitterTransactionService", () => {
       },
     });
 
-    expect(findMoveCall(enableTx, "liquidlink_points", "sync_py_position_with_points"))
+    expect(findMoveCall(enableTx, "liquidlink_points", "checkpoint_yt"))
       .toBeDefined();
     expect(findMoveCall(enableTx, "liquidlink_points", "create_yt_referral_record_with_points"))
       .toBeDefined();
     expect(findMoveCall(enableTx, "liquidlink_points", "create_lp_referral_record_with_points"))
       .toBeDefined();
-    expect(findMoveCall(enableTx, "transfer", "public_share_object")).toBeDefined();
+    expect(findMoveCall(enableTx, "transfer", "public_share_object")).toBeUndefined();
+    expect(findMoveCall(enableTx, "referral_policy", "share_yt_record")?.arguments).toHaveLength(1);
+    expect(findMoveCall(enableTx, "referral_policy", "share_lp_record")?.arguments).toHaveLength(1);
+    expect(
+      findMoveCall(enableTx, "liquidlink_points", "checkpoint_yt")?.arguments,
+    ).toHaveLength(7);
+    expect(
+      findMoveCall(enableTx, "liquidlink_points", "create_yt_referral_record_with_points")?.arguments,
+    ).toHaveLength(9);
+    expect(
+      findMoveCall(enableTx, "liquidlink_points", "create_lp_referral_record_with_points")?.arguments,
+    ).toHaveLength(10);
     const lpReferralSettles = collectMoveCalls(addLpTx).filter(
       (call) => call.module === "liquidlink_points"
         && call.function === "settle_lp_reward_operation_with_referral",
@@ -664,19 +742,40 @@ describe("JitterTransactionService", () => {
       scopesByPointConfig: { [pointConfigObjectId]: ["lp"] },
     });
 
-    expect(findMoveCall(ytOnlyTx, "liquidlink_points", "sync_py_position_with_points"))
+    expect(findMoveCall(ytOnlyTx, "liquidlink_points", "checkpoint_yt"))
       .toBeDefined();
     expect(findMoveCall(ytOnlyTx, "liquidlink_points", "create_yt_referral_record_with_points"))
       .toBeDefined();
     expect(findMoveCall(ytOnlyTx, "liquidlink_points", "create_lp_referral_record_with_points"))
       .toBeUndefined();
 
-    expect(findMoveCall(lpOnlyTx, "liquidlink_points", "sync_py_position_with_points"))
+    expect(findMoveCall(lpOnlyTx, "liquidlink_points", "checkpoint_yt"))
       .toBeUndefined();
     expect(findMoveCall(lpOnlyTx, "liquidlink_points", "create_yt_referral_record_with_points"))
       .toBeUndefined();
     expect(findMoveCall(lpOnlyTx, "liquidlink_points", "create_lp_referral_record_with_points"))
       .toBeDefined();
+  });
+
+  test("binds existing unbound YT and LP referral records without recreating them", async () => {
+    const config = getReferralRewardedTestConfig();
+    const service = createJitterTransactionService({ config });
+    const pointConfigObjectId = config.liquidlink!.pointPrograms![0]!.pointConfigObjectId;
+    const tx = await service.buildBindReferralTx({
+      senderAddress,
+      positionId: objectId("d1"),
+      ytReferralRecordObjectIds: { [pointConfigObjectId]: objectId("d8") },
+      lpReferralRecordObjectIds: { [pointConfigObjectId]: objectId("d9") },
+    });
+
+    expect(findMoveCall(tx, "liquidlink_points", "bind_yt_referrer")?.arguments)
+      .toHaveLength(10);
+    expect(findMoveCall(tx, "liquidlink_points", "bind_lp_referrer")?.arguments)
+      .toHaveLength(11);
+    expect(findMoveCall(tx, "liquidlink_points", "create_yt_referral_record_with_points"))
+      .toBeUndefined();
+    expect(findMoveCall(tx, "liquidlink_points", "create_lp_referral_record_with_points"))
+      .toBeUndefined();
   });
 
   test("settles Point rewarders before standalone Coin reward claims", () => {
@@ -805,7 +904,7 @@ describe("JitterTransactionService", () => {
     expect(collectMoveCalls(settledZapTx)).toContainEqual(
       expect.objectContaining({
         module: "router",
-        function: "redeem_market_state_after_expiry",
+        function: "redeem_pt_after_expiry",
       }),
     );
     expect(collectMoveCalls(settledZapTx)).not.toContainEqual(
@@ -817,7 +916,7 @@ describe("JitterTransactionService", () => {
     expect(collectMoveCalls(directSyTx)).not.toContainEqual(
       expect.objectContaining({
         module: "router",
-        function: "redeem_market_state_after_expiry",
+        function: "redeem_pt_after_expiry",
       }),
     );
     expect(findMoveCall(addTx, "router", "add_lp")?.arguments).toHaveLength(12);
@@ -865,7 +964,7 @@ describe("JitterTransactionService", () => {
     expect(collectMoveCalls(claimTx)).toContainEqual(
       expect.objectContaining({
         module: "router",
-        function: "claim_market_state_yt_interest",
+        function: "claim_yt_interest",
       }),
     );
   });
@@ -899,6 +998,9 @@ describe("JitterTransactionService", () => {
       senderAddress,
     });
     const redeemCalls = collectMoveCalls(redeemTx);
+    expect(redeemCalls.some((call) => call.function === "burn_sy_exact_in_market_state")).toBe(false);
+    expect(redeemCalls.some((call) => call.module === "scallop_price_ticket")).toBe(false);
+    expect(redeemCalls.find((call) => call.module === "scallop_market_vault")?.arguments).toHaveLength(7);
 
     expect(redeemCalls).toContainEqual(
       expect.objectContaining({ module: "scallop_market_vault", function: "redeem" }),
@@ -914,16 +1016,20 @@ describe("JitterTransactionService", () => {
       senderAddress,
     });
     const queueCalls = collectMoveCalls(queueTx);
+    expect(queueCalls[0]?.arguments).toHaveLength(6);
+    expect(queueTx.getData().commands.some((command) => command.$kind === "TransferObjects")).toBe(false);
 
     expect(queueCalls).toContainEqual(
       expect.objectContaining({ module: "scallop_market_vault", function: "queue_redeem" }),
     );
 
     const cancelQueuedTx = await service.buildCancelQueuedRedeemSyTx({
-      requestId: objectId("37"),
+      requestId: "37",
       senderAddress,
     });
     const cancelQueuedCalls = collectMoveCalls(cancelQueuedTx);
+    const requestArg = cancelQueuedCalls[0]?.arguments[0];
+    expect(requestArg && "Input" in requestArg && cancelQueuedTx.getData().inputs[requestArg.Input]?.$kind).toBe("Pure");
 
     expect(cancelQueuedCalls).toContainEqual(
       expect.objectContaining({
@@ -947,6 +1053,19 @@ describe("JitterTransactionService", () => {
     expect(calls).not.toContainEqual(
       expect.objectContaining({ module: "demo_price_ticket", function: "quote" }),
     );
+  });
+
+  test("receipt redemption and queue need no upstream objects or index query", async () => {
+    const config = { ...getScallopTestConfig(), scallopMarketObjectId: undefined, scallopVersionObjectId: undefined };
+    const service = createJitterTransactionService({
+      config,
+      resolveSyIndex: () => { throw new Error("upstream unavailable"); },
+    });
+    const params = { syCoinId: objectId("39"), syAmount: 123n, minMarketCoinOut: 123n, senderAddress };
+    const tx = await service.buildRedeemSyToReceiptTx(params);
+    expect(collectMoveCalls(tx).map((call) => call.function)).toEqual(["redeem"]);
+    const queued = await service.buildQueueRedeemSyTx(params);
+    expect(collectMoveCalls(queued).map((call) => call.function)).toEqual(["queue_redeem"]);
   });
 
   test("builds orderbook action transactions as Transaction blocks", async () => {

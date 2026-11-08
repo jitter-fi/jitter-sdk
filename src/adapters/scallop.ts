@@ -5,6 +5,7 @@ import {
 } from "../sy.js";
 import type { JitterMarketConfig } from "../types.js";
 import type { JitterAdapterManifest } from "./types.js";
+import { addDepositDustToTreasury } from "./deposit-dust.js";
 
 export const scallopAdapterManifest: JitterAdapterManifest = {
   kind: "scallop",
@@ -44,21 +45,24 @@ export const scallopAdapterManifest: JitterAdapterManifest = {
     return addScallopPriceInfo(tx, config);
   },
 
-  addDepositToSy({ tx, config, mintRequest, inputCoin, syAmount }) {
-    return {
-      excessCoin: addScallopDepositFromUnderlying(
+  addDepositToSy({ tx, config, mintRequest, inputCoin, syAmount, sweepDepositDust }) {
+    const excessCoin = addScallopDepositFromUnderlying(
         tx,
         config,
         mintRequest,
         inputCoin,
         syAmount,
-      ),
-    };
+      );
+    if (sweepDepositDust) {
+      addDepositDustToTreasury(tx, config, excessCoin, requireConfigValue(config.scallopMarketCoinTypeTag, "scallopMarketCoinTypeTag"));
+      return {};
+    }
+    return { excessCoin };
   },
 
-  addRedeemFromSy({ tx, config, burnRequest, syAmount }) {
+  addRedeemFromSy({ tx, config, input, syAmount }) {
     return {
-      outputCoin: addScallopRedeemToUnderlying(tx, config, burnRequest, syAmount),
+      outputCoin: addScallopRedeemToUnderlying(tx, config, input, syAmount),
     };
   },
 };

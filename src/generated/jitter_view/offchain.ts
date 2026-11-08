@@ -6,9 +6,9 @@
 /**
  * offchain - read-only helpers for frontends, SDKs, and PTB simulation.
  *
- * `jitter_view` is intentionally replaceable. It provides MarketState-first
- * snapshots, quote previews, and guardrail helpers without adding more surface
- * area to the core protocol package.
+ * `jitter_view` is intentionally replaceable. It provides Market-first snapshots,
+ * quote previews, and guardrail helpers without adding more surface area to the
+ * core protocol package.
  */
 
 import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from '../utils/index.js';
@@ -32,7 +32,7 @@ export const RewardSnapshot = new MoveStruct({ name: `${$moduleName}::RewardSnap
         lp_guard: bcs.u64(),
         pool_guard: bcs.u64()
     } });
-export const MarketStateViewSnapshot = new MoveStruct({ name: `${$moduleName}::MarketStateViewSnapshot`, fields: {
+export const MarketViewSnapshot = new MoveStruct({ name: `${$moduleName}::MarketViewSnapshot`, fields: {
         market_state_id: bcs.Address,
         pause: PauseSnapshot,
         expiry: bcs.u64(),

@@ -25,6 +25,33 @@ function requireGlobalConfigObjectId(config: JitterMarketConfig): string {
   return requireConfigValue(config.globalConfigObjectId, "globalConfigObjectId");
 }
 
+export type NaviOracleRefreshConfig = {
+  packageId: string;
+  oracleConfigObjectId: string;
+  priceOracleObjectId: string;
+  supraOracleHolderObjectId: string;
+  pythPriceInfoObjectId: string;
+  switchboardAggregatorObjectId: string;
+  feedId: string;
+};
+
+/**
+ * Append NAVI's active v3 price update before addNaviRedeem. If Pyth is stale,
+ * append its authenticated price update first. Never substitute a local price
+ * or use the retired update_single_price/v2 entries (both abort upstream).
+ */
+export function addNaviOracleRefresh(tx: Transaction, config: NaviOracleRefreshConfig): void {
+  tx.moveCall({
+    target: `${config.packageId}::oracle_pro::update_single_price_v3`,
+    arguments: [
+      tx.object.clock(), tx.object(config.oracleConfigObjectId),
+      tx.object(config.priceOracleObjectId), tx.object(config.supraOracleHolderObjectId),
+      tx.object(config.pythPriceInfoObjectId), tx.object(config.switchboardAggregatorObjectId),
+      tx.pure.address(config.feedId),
+    ],
+  });
+}
+
 /**
  * Append the demo oracle pipeline to a PTB and return PriceInfo<SY>.
  *
@@ -169,7 +196,8 @@ export function addEmberPriceInfo(
 /**
  * Append the Suilend oracle pipeline to a PTB and return PriceInfo<SY>.
  *
- * The SY index is derived on-chain from Suilend's simulated cToken ratio.
+ * The adapter compounds the bound reserve inside the quote call before reading
+ * its ratio. Refresh cannot be omitted by a caller composing its own PTB.
  */
 export function addSuilendPriceInfo(
   tx: Transaction,
@@ -188,7 +216,7 @@ export function addSuilendPriceInfo(
       globalConfigObjectId,
       collector as TransactionObjectArgument,
       requireConfigValue(config.suilendMarketVaultObjectId, "suilendMarketVaultObjectId"),
-      requireConfigValue(config.suilendReserveObjectId, "suilendReserveObjectId"),
+      requireConfigValue(config.suilendLendingMarketObjectId, "suilendLendingMarketObjectId"),
     ],
     typeArguments: [
       requireConfigValue(config.suilendProtocolTypeTag, "suilendProtocolTypeTag"),

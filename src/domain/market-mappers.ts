@@ -1,4 +1,6 @@
 import { FP64_ONE } from "../constants.js";
+import {STABLECOIN_ASSETS} from '../ember-deployment.js';
+import {normalizeStructTag} from '@mysten/sui/utils';
 import {
   getMarketAccountingDecimals,
   getMarketUnderlyingDecimals,
@@ -74,6 +76,7 @@ export type JitterMarketOverview = {
   metadataUri?: string;
   projectWebsiteUri?: string;
   maturity: string;
+  startTimestamp?: number;
   maturityTimestamp: number;
   liquidity: number;
   tvl: number;
@@ -86,6 +89,10 @@ export type JitterMarketOverview = {
   ptUsdValue: number;
   underlyingApy: number;
   underlyingPrice: number;
+  /** USD per receipt / SY, available only with explicit underlying USD and a live source index. */
+  marketCoinPrice?: number;
+  syPrice?: number;
+  lpPrice?: number;
   totalUnderlyingApy: number;
   longYieldApy: number;
   ytLeverage: number;
@@ -168,6 +175,7 @@ export function buildJitterMarketOverview(
   const fixedApy = calcImpliedApyFraction(pool.last_ln_implied_rate);
   const expiryMs = lifecycle.expiryMs;
   const maturity = MATURITY_FORMATTER.format(new Date(expiryMs));
+  const startTimestamp = normalizeMarketStartTimestamp(config.startTimestamp);
   const yearsToMaturity = Math.max(expiryMs - nowMs, 0) / YEAR_MS;
 
   const totalSyUnits = toDecimalUnits(pool.total_sy, decimals);
@@ -234,6 +242,7 @@ export function buildJitterMarketOverview(
     metadataUri: config.marketMetadataUri,
     projectWebsiteUri: config.projectWebsiteUri,
     maturity,
+    ...(startTimestamp === undefined ? {} : { startTimestamp }),
     maturityTimestamp: Math.floor(expiryMs / 1000),
     liquidity,
     tvl: liquidity,
@@ -281,6 +290,14 @@ export function buildJitterMarketOverview(
       categories,
     }),
   };
+}
+
+function normalizeMarketStartTimestamp(value: number | null | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  return Math.floor(value > 10_000_000_000 ? value / 1000 : value);
 }
 
 function buildYtRewards(config: JitterMarketConfig): MarketYieldReward[] {
@@ -362,6 +379,8 @@ function resolveUnderlyingPrice(config: JitterMarketConfig): number {
     return config.underlyingPriceUsd;
   }
 
+  // A stablecoin fallback is a peg estimate, never the native SUI price.
+  if (Object.values(STABLECOIN_ASSETS).some(a => normalizeStructTag(a.type) === normalizeStructTag(config.underlyingTypeTag))) return 1;
   const token = `${config.underlyingTypeTag} ${config.scallopMarketCoinTypeTag ?? ""}`.toLowerCase();
   if (token.includes("usdc")) return 1;
   if (token.includes("sui")) {

@@ -55,12 +55,18 @@ export type JitterMarketConfig = {
   /** Replaceable read-only quote/snapshot package. Core `jitter` no longer exposes offchain quote helpers. */
   jitterViewPackageId?: string;
   jitterRegistryPackageId?: string;
+  /** Defining package of Registry V2 types when its latest call package differs after an upgrade. */
+  jitterRegistryOriginalPackageId?: string;
   jitterFrameworkPackageId?: string;
+  jitterMathPackageId?: string;
   jitterExtensionsPackageId?: string;
   demoAdapterPackageId: string;
   scallopAdapterPackageId?: string;
   scallopProtocolPackageId?: string;
   emberAdapterPackageId?: string;
+  haedalAdapterPackageId?: string;
+  haedalProtocolPackageId?: string;
+  haedalStakingObjectId?: string;
   emberVaultsPackageId?: string;
   suilendAdapterPackageId?: string;
   naviAdapterPackageId?: string;
@@ -76,13 +82,15 @@ export type JitterMarketConfig = {
   marketRegistryObjectId?: string;
   aclObjectId: string;
 
-  /** Unified jitter::market_state::MarketState object id. */
+  /** Unified jitter::market::Market object id. */
   marketObjectId: string;
+  /** Market start timestamp in Unix seconds. Used for display timelines and decay charts. */
+  startTimestamp?: number;
   /** Optional explicit alias for deployments that name the unified state separately. */
   marketStateObjectId?: string;
-  /** @deprecated Unified MarketState replaces the former separate PyState object. */
+  /** @deprecated Unified Market replaces the former separate PyState object. */
   pyStateObjectId: string;
-  /** @deprecated Unified MarketState replaces the former separate Pool object. */
+  /** @deprecated Unified Market replaces the former separate Pool object. */
   poolObjectId: string;
   orderbookObjectId?: string | null;
   ytOrderbookObjectId?: string | null;
@@ -92,9 +100,12 @@ export type JitterMarketConfig = {
   scallopMarketObjectId?: string;
   scallopVersionObjectId?: string;
   emberMarketVaultObjectId?: string;
+  haedalMarketVaultObjectId?: string;
   emberVaultObjectId?: string;
   emberProtocolConfigObjectId?: string;
   suilendMarketVaultObjectId?: string;
+  /** Parent shared LendingMarket. Reserves are embedded and cannot be PTB inputs. */
+  suilendLendingMarketObjectId?: string;
   suilendReserveObjectId?: string;
   naviMarketVaultObjectId?: string;
   naviStorageObjectId?: string;
@@ -125,6 +136,8 @@ export type JitterMarketConfig = {
   marketDescription?: string;
   marketIconUri?: string;
   marketMetadataUri?: string;
+  /** Native Registry V2 Series category. External metadata URLs are never fetched. */
+  marketCategory?: string;
   /** Adapter namespace advertised by the registry, for example scallop. */
   adapterKind?: string;
   /** Parent registry project display metadata. */
@@ -162,6 +175,12 @@ export type JitterMarketConfig = {
 };
 
 export type JitterLiquidlinkProjectConfig = {
+  /** Original package defining owned referral receipt types after upgrades. */
+  referralOriginalPackageId?: string;
+  /** Original package defining owned PointClaim types after upgrades. */
+  extensionsOriginalPackageId?: string;
+  /** Chain-discovered terminal state of the legacy default PointConfig. */
+  closed?: boolean;
   /** Disabled or missing means this project's markets use normal Jitter calls. */
   enabled?: boolean;
   /** Published liquidlink_incentive_system package used to settle policy-complete stamps. */
@@ -207,6 +226,8 @@ export type JitterLiquidlinkProjectConfig = {
 };
 
 export type JitterLiquidlinkPointProgramConfig = {
+  /** Chain-discovered terminal state; closed exits archive receipts without LiquidLink. */
+  closed?: boolean;
   /** Stable admin-facing label, for example "Jitter Season 2" or "Scallop". */
   label: string;
   /** Protocol namespace used to group programs in admin tooling. */
@@ -456,9 +477,9 @@ export type PyPositionFields = {
   py_index: string;
   accrued: string;
   market_state_id: string;
-  /** @deprecated Unified MarketState replaces the former separate PyState object. */
+  /** @deprecated Unified Market replaces the former separate PyState object. */
   py_state_id: string;
-  /** @deprecated Unified MarketState replaces the former separate Market object. */
+  /** @deprecated Unified Market replaces the former separate Market object. */
   market_id: string;
   expiry: string;
   created_at: string;
@@ -529,8 +550,17 @@ export type PyStateFields = {
   market_id: string;
   /** FP64 raw treasury interest accrued (u128 as string). */
   total_treasury_interest?: string;
-  /** FP64 raw last collected interest index (u128 as string). */
+  /** Legacy deployment field; new markets use interest_segment. */
   last_collect_interest_index?: string;
+  /** Constant-supply cumulative interest accounting. Q64 values are raw integers. */
+  interest_segment?: {
+    start_index: string;
+    supply: string;
+    user_accounted: string;
+    fee_accounted: string;
+    index_accounted: string;
+    terminal_dust: string;
+  };
   /** Raw SY reserve fees collected from AMM swaps and pending treasury sweep. */
   reserve_fee_balance?: string;
 };
@@ -565,6 +595,8 @@ export type NaviMarketVaultFields = {
   market_id: string;
   navi_storage_id: string;
   navi_pool_id: string;
+  incentive_v2_id: string;
+  incentive_v3_id: string;
   asset_id: number | string;
   total_underlying_deposited: string;
   total_underlying_withdrawn: string;

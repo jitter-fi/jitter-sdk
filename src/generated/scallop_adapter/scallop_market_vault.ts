@@ -28,8 +28,8 @@ export const ScallopMarketVault = new MoveStruct({ name: `${$moduleName}::Scallo
         withdraw_bps_per_window: bcs.u64(),
         withdraw_window_start_ms: bcs.u64(),
         withdraw_window_base_reserve: bcs.u64(),
-        withdraw_window_withdrawn: bcs.u64(),
-        withdraw_window_minted: bcs.u64(),
+        withdraw_window_withdrawn: bcs.u128(),
+        withdraw_window_minted: bcs.u128(),
         queued_market_coin: bcs.u64(),
         next_withdraw_request_id: bcs.u64(),
         withdraw_queue: linked_table.LinkedTable(bcs.u64())
@@ -40,7 +40,6 @@ export const WithdrawRequest = new MoveStruct({ name: `${$moduleName}::WithdrawR
         market_id: bcs.Address,
         scallop_market_id: bcs.Address,
         owner: bcs.Address,
-        underlying_value: bcs.u64(),
         market_coin_amount: bcs.u64(),
         created_at: bcs.u64(),
         sy_balance: balance_1.Balance
@@ -62,7 +61,6 @@ export const DepositEvent = new MoveStruct({ name: `${$moduleName}::DepositEvent
 export const RedeemEvent = new MoveStruct({ name: `${$moduleName}::RedeemEvent`, fields: {
         market_id: bcs.Address,
         scallop_market_id: bcs.Address,
-        underlying_value_out: bcs.u64(),
         market_coin_out: bcs.u64(),
         redeemer: bcs.Address
     } });
@@ -96,7 +94,6 @@ export const WithdrawQueuedEvent = new MoveStruct({ name: `${$moduleName}::Withd
         market_id: bcs.Address,
         scallop_market_id: bcs.Address,
         owner: bcs.Address,
-        underlying_value: bcs.u64(),
         market_coin_amount: bcs.u64(),
         created_at: bcs.u64()
     } });
@@ -106,7 +103,6 @@ export const WithdrawCancelledEvent = new MoveStruct({ name: `${$moduleName}::Wi
         market_id: bcs.Address,
         scallop_market_id: bcs.Address,
         owner: bcs.Address,
-        underlying_value: bcs.u64(),
         market_coin_amount: bcs.u64(),
         sy_amount: bcs.u64(),
         cancelled_at: bcs.u64()
@@ -117,7 +113,6 @@ export const WithdrawCompletedEvent = new MoveStruct({ name: `${$moduleName}::Wi
         market_id: bcs.Address,
         scallop_market_id: bcs.Address,
         owner: bcs.Address,
-        underlying_value: bcs.u64(),
         market_coin_amount: bcs.u64(),
         completed_at: bcs.u64(),
         operator: bcs.Address
@@ -128,7 +123,6 @@ export const WithdrawRejectedEvent = new MoveStruct({ name: `${$moduleName}::Wit
         market_id: bcs.Address,
         scallop_market_id: bcs.Address,
         owner: bcs.Address,
-        underlying_value: bcs.u64(),
         market_coin_amount: bcs.u64(),
         sy_amount: bcs.u64(),
         rejected_at: bcs.u64(),
@@ -441,26 +435,22 @@ export function deposit(options: DepositOptions) {
     });
 }
 export interface RedeemArguments {
-    request: RawTransactionArgument<string>;
+    syCoin: RawTransactionArgument<string>;
     minMarketCoinOut: RawTransactionArgument<number | bigint>;
     syState: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
     vault: RawTransactionArgument<string>;
     state: RawTransactionArgument<string>;
-    scallopVersion: RawTransactionArgument<string>;
-    scallopMarket: RawTransactionArgument<string>;
 }
 export interface RedeemOptions {
     package?: string;
     arguments: RedeemArguments | [
-        request: RawTransactionArgument<string>,
+        syCoin: RawTransactionArgument<string>,
         minMarketCoinOut: RawTransactionArgument<number | bigint>,
         syState: RawTransactionArgument<string>,
         globalConfig: RawTransactionArgument<string>,
         vault: RawTransactionArgument<string>,
-        state: RawTransactionArgument<string>,
-        scallopVersion: RawTransactionArgument<string>,
-        scallopMarket: RawTransactionArgument<string>
+        state: RawTransactionArgument<string>
     ];
     typeArguments: [
         string,
@@ -469,6 +459,7 @@ export interface RedeemOptions {
         string
     ];
 }
+/** Release exact receipt shares; no upstream valuation or accrual is required. */
 export function redeem(options: RedeemOptions) {
     const packageAddress = options.package ?? 'jitter/scallop-adapter';
     const argumentsTypes = [
@@ -478,11 +469,9 @@ export function redeem(options: RedeemOptions) {
         null,
         null,
         null,
-        null,
-        null,
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["request", "minMarketCoinOut", "syState", "globalConfig", "vault", "state", "scallopVersion", "scallopMarket"];
+    const parameterNames = ["syCoin", "minMarketCoinOut", "syState", "globalConfig", "vault", "state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'scallop_market_vault',
@@ -497,8 +486,6 @@ export interface QueueRedeemArguments {
     globalConfig: RawTransactionArgument<string>;
     vault: RawTransactionArgument<string>;
     state: RawTransactionArgument<string>;
-    scallopVersion: RawTransactionArgument<string>;
-    scallopMarket: RawTransactionArgument<string>;
 }
 export interface QueueRedeemOptions {
     package?: string;
@@ -507,9 +494,7 @@ export interface QueueRedeemOptions {
         minMarketCoinOut: RawTransactionArgument<number | bigint>,
         globalConfig: RawTransactionArgument<string>,
         vault: RawTransactionArgument<string>,
-        state: RawTransactionArgument<string>,
-        scallopVersion: RawTransactionArgument<string>,
-        scallopMarket: RawTransactionArgument<string>
+        state: RawTransactionArgument<string>
     ];
     typeArguments: [
         string,
@@ -526,11 +511,9 @@ export function queueRedeem(options: QueueRedeemOptions) {
         null,
         null,
         null,
-        null,
-        null,
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["syCoin", "minMarketCoinOut", "globalConfig", "vault", "state", "scallopVersion", "scallopMarket"];
+    const parameterNames = ["syCoin", "minMarketCoinOut", "globalConfig", "vault", "state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'scallop_market_vault',
@@ -1334,38 +1317,6 @@ export function requestMarketCoinAmount(options: RequestMarketCoinAmountOptions)
         package: packageAddress,
         module: 'scallop_market_vault',
         function: 'request_market_coin_amount',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        typeArguments: options.typeArguments
-    });
-}
-export interface RequestUnderlyingValueArguments {
-    vault: RawTransactionArgument<string>;
-    requestId: RawTransactionArgument<number | bigint>;
-}
-export interface RequestUnderlyingValueOptions {
-    package?: string;
-    arguments: RequestUnderlyingValueArguments | [
-        vault: RawTransactionArgument<string>,
-        requestId: RawTransactionArgument<number | bigint>
-    ];
-    typeArguments: [
-        string,
-        string,
-        string,
-        string
-    ];
-}
-export function requestUnderlyingValue(options: RequestUnderlyingValueOptions) {
-    const packageAddress = options.package ?? 'jitter/scallop-adapter';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["vault", "requestId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'scallop_market_vault',
-        function: 'request_underlying_value',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });

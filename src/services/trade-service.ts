@@ -1,4 +1,7 @@
 import type { JitterMarketConfig } from "../types.js";
+import { getHaedalStakeQuote } from "../adapters/haedal.js";
+import { getEmberDepositQuote } from '../adapters/ember.js';
+import { resolveReceiptWithdrawalCapacity } from "../domain/withdrawal-capacity.js";
 import {
   createJitterQuoteService,
   type JitterPreviewAssumption,
@@ -16,7 +19,10 @@ import type {
 import {
   createJitterTransactionService,
   type JitterTransactionService,
+  type SyOutputTransform,
 } from "./transaction-service.js";
+import { detectAdapterKind } from "../adapters/registry.js";
+import { buildWithSyOutputRedemption, syOutputSimulator, type SyOutputSimulator } from "./sy-output-redemption.js";
 import { getSuiGrpcClient, type GrpcNetworkKind } from "../rpc.js";
 import { SuiJitterEventReader } from "../infrastructure/sui-event-reader.js";
 import {
@@ -43,6 +49,8 @@ export type JitterTradeQuoteRequest = {
 };
 
 export type JitterTradeBuildTransactionRequest = JitterTradeQuoteRequest & {
+  /** The quote accepted by the user. Preserves its route and minimum outputs. */
+  reviewedQuote?: JitterTradeQuoteResponse;
   inputCoinId?: string;
   inputCoinIds?: string[];
   positionId?: string;
@@ -79,6 +87,8 @@ export type JitterTradePreviewSnapshot = {
 };
 
 export type JitterTradeQuoteResponse = {
+  /** Original intent used for optional reviewed-quote transaction construction. */
+  reviewedRequest?: JitterTradeQuoteRequest;
   status: JitterTradeQuoteStatus;
   marketId: string;
   actionId: JitterTradeActionId;
@@ -118,6 +128,8 @@ export type CreateJitterTradeServiceOptions = {
   metadata?: JitterMarketTradeMetadata | null;
   quoteService?: JitterQuoteService;
   transactionService?: JitterTransactionService;
+  /** Offline/custom transport support for the two-stage SY output simulation. */
+  simulateSyOutputs?: SyOutputSimulator;
 };
 
 export type JitterTradeService = {
@@ -169,10 +181,23 @@ export function createJitterTradeService(
   options: CreateJitterTradeServiceOptions,
 ): JitterTradeService {
   const quoteService =
-    options.quoteService ?? createJitterQuoteService({ config: options.config });
-  const transactionService =
+    options.quoteService ?? createJitterQuoteService({ config: options.config, network: options.network });
+  const adapterKind = detectAdapterKind(options.config);
+  const autoRedeemOutputs = Boolean((options.network || options.simulateSyOutputs) && !options.transactionService &&
+    (adapterKind === "scallop" || adapterKind === "haedal" || adapterKind === "ember"));
+  const availableTradeQuote = (...args: Parameters<typeof availableQuoteResponse>) => {
+    const quote = availableQuoteResponse(...args);
+    return autoRedeemOutputs ? receiptOutputQuote(quote) : quote;
+  };
+  const makeTransactionService = (transformSyOutput?: SyOutputTransform) =>
     options.transactionService ??
-    createJitterTransactionService({ config: options.config });
+    createJitterTransactionService({ config: options.config, network: options.network,
+      depositDustToTreasury: options.network === "mainnet",
+      transformSyOutput,
+      ...((options.config.haedalAdapterPackageId || options.config.emberAdapterPackageId) && options.network ? {
+        resolveSyIndex: async () => (await (options.config.emberAdapterPackageId ? getEmberDepositQuote : getHaedalStakeQuote)(options.network!, options.config, 0n)).syIndex,
+      } : {}),
+    });
 
   return {
     async quoteTrade(
@@ -196,12 +221,13 @@ export function createJitterTradeService(
               request.inputAsset,
               amount,
               syIndex,
+              options.config,
             );
             const preview = await quoteService.previewBuyPt({
               syIn: input.syIn,
               syIndex: input.syIndex,
             });
-            return availableQuoteResponse(request, actionId, slippageBps, {
+            return availableTradeQuote(request, actionId, slippageBps, {
               expectedOutput: [{ asset: "pt", amount: preview.output.ptOut }],
               minReceived: [
                 { asset: "pt", amount: applySlippage(preview.output.ptOut, slippageBps) },
@@ -218,12 +244,10 @@ export function createJitterTradeService(
             const minSyOut = applySlippage(syOut, slippageBps);
             const output = await quoteSyOutputAmounts(
               options,
-              quoteService,
               syOut,
               minSyOut,
-              syIndex,
             );
-            return availableQuoteResponse(request, actionId, slippageBps, {
+            return availableTradeQuote(request, actionId, slippageBps, {
               expectedOutput: output.expectedOutput,
               minReceived: output.minReceived,
               priceImpactBps: preview.slippageBps,
@@ -238,12 +262,13 @@ export function createJitterTradeService(
               request.inputAsset,
               amount,
               syIndex,
+              options.config,
             );
             const preview = await quoteService.previewBuyYt({
               syIn: input.syIn,
               syIndex: input.syIndex,
             });
-            return availableQuoteResponse(request, actionId, slippageBps, {
+            return availableTradeQuote(request, actionId, slippageBps, {
               expectedOutput: [
                 { asset: "yt", amount: preview.output.ytOut },
                 { asset: "sy", amount: preview.output.syRefund },
@@ -264,12 +289,10 @@ export function createJitterTradeService(
             const minSyOut = applySlippage(syOut, slippageBps);
             const output = await quoteSyOutputAmounts(
               options,
-              quoteService,
               syOut,
               minSyOut,
-              syIndex,
             );
-            return availableQuoteResponse(request, actionId, slippageBps, {
+            return availableTradeQuote(request, actionId, slippageBps, {
               expectedOutput: output.expectedOutput,
               minReceived: output.minReceived,
               priceImpactBps: preview.slippageBps,
@@ -287,7 +310,7 @@ export function createJitterTradeService(
               syIn: amount,
               ptIn: pairedPtAmount,
             });
-            return availableQuoteResponse(request, actionId, slippageBps, {
+            return availableTradeQuote(request, actionId, slippageBps, {
               expectedOutput: [{ asset: "lp", amount: preview.output.lpOut }],
               minReceived: [
                 { asset: "lp", amount: applySlippage(preview.output.lpOut, slippageBps) },
@@ -304,12 +327,13 @@ export function createJitterTradeService(
               request.inputAsset,
               amount,
               syIndex,
+              options.config,
             );
             const preview = await quoteService.previewAddLpKeepYt({
               syIn: input.syIn,
               syIndex: input.syIndex,
             });
-            return availableQuoteResponse(request, actionId, slippageBps, {
+            return availableTradeQuote(request, actionId, slippageBps, {
               expectedOutput: [
                 { asset: "lp", amount: preview.output.lpOut },
                 { asset: "yt", amount: preview.output.keptYt },
@@ -330,6 +354,7 @@ export function createJitterTradeService(
               request.inputAsset,
               amount,
               syIndex,
+              options.config,
             );
             const preview = await quoteService.previewAddLpFromSy({
               syIn: input.syIn,
@@ -342,7 +367,7 @@ export function createJitterTradeService(
                 "Pool cannot produce a positive LP output for this non-keep YT zap. Use Keep YT mode or reduce the input amount.",
               );
             }
-            return availableQuoteResponse(request, actionId, slippageBps, {
+            return availableTradeQuote(request, actionId, slippageBps, {
               expectedOutput: [
                 { asset: "lp", amount: preview.output.lpOut },
                 { asset: "sy", amount: preview.output.syOut },
@@ -359,7 +384,7 @@ export function createJitterTradeService(
           }
           case "remove_lp": {
             const preview = await quoteService.previewRemoveLp({ lpIn: amount });
-            return availableQuoteResponse(request, actionId, slippageBps, {
+            return availableTradeQuote(request, actionId, slippageBps, {
               expectedOutput: [
                 { asset: "sy", amount: preview.output.syOut },
                 { asset: "pt", amount: preview.output.ptOut },
@@ -383,12 +408,10 @@ export function createJitterTradeService(
             const minSyOut = applySlippage(syOut, slippageBps);
             const output = await quoteSyOutputAmounts(
               options,
-              quoteService,
               syOut,
               minSyOut,
-              syIndex,
             );
-            return availableQuoteResponse(request, actionId, slippageBps, {
+            return availableTradeQuote(request, actionId, slippageBps, {
               expectedOutput: output.expectedOutput,
               minReceived: output.minReceived,
               priceImpactBps: preview.slippageBps,
@@ -410,7 +433,17 @@ export function createJitterTradeService(
     async buildTradeTransaction(
       request: JitterTradeBuildTransactionRequest,
     ): Promise<JitterTradeBuildTransactionResponse> {
-      const quote = await this.quoteTrade(request);
+      const quote = request.reviewedQuote ?? await this.quoteTrade(request);
+      if (request.reviewedQuote && (
+        !quote.reviewedRequest ||
+        quote.reviewedRequest.owner !== request.owner ||
+        quote.reviewedRequest.pairedPtAmount !== request.pairedPtAmount ||
+        quote.reviewedRequest.syIndex !== request.syIndex ||
+        quote.marketId !== request.marketId || quote.product !== request.product ||
+        quote.side !== request.side || quote.inputAsset !== request.inputAsset ||
+        quote.inputAmount !== request.amount || quote.slippageBps !== request.slippageBps ||
+        (request.actionId !== undefined && quote.actionId !== request.actionId)
+      )) throw new Error("Trade request does not match the reviewed quote. Review a new quote.");
       if (quote.status !== "available") {
         throw new Error(
           `Cannot build trade transaction: ${quote.unavailableReason ?? "quote unavailable"}`,
@@ -420,6 +453,11 @@ export function createJitterTradeService(
       const amount = parseAtomicAmount(request.amount, "amount");
       const syIndex = parseOptionalBigInt(request.syIndex, "syIndex");
       const deadlineMs = parseOptionalBigInt(request.deadlineMs, "deadlineMs");
+      if (autoRedeemOutputs && options.network &&
+        (quote.actionId === "sell_pt" || quote.actionId === "sell_yt" || quote.actionId === "remove_lp_to_sy")) {
+        await shouldRedeemReviewedOutput(options, quote,
+          previewOutputAmount(quote, quote.actionId === "remove_lp_to_sy" ? "totalSyOut" : "syOut"));
+      }
       const rewardSettlement = {
         strategy: "empty-vector" as const,
         lpReferralRecordObjectIds: await resolveTradeLpReferralRecords(
@@ -434,7 +472,8 @@ export function createJitterTradeService(
         ),
       };
 
-      const transaction = await (async () => {
+      const buildTransaction = async (transformSyOutput?: SyOutputTransform) => {
+        const transactionService = makeTransactionService(transformSyOutput);
         switch (quote.actionId) {
           case "buy_pt":
             if (quote.inputAsset === "underlying") {
@@ -477,8 +516,8 @@ export function createJitterTradeService(
           case "sell_pt": {
             const syOut = previewOutputAmount(quote, "syOut");
             const minSyOut = minPreviewOutputAmount(quote, "syOut");
-            if (await shouldAutoRedeemSyOutput(options, syOut)) {
-              return transactionService.buildSellPtToUnderlyingTx({
+            if (!autoRedeemOutputs && await shouldRedeemReviewedOutput(options, quote, syOut)) {
+              return transactionService.buildSellPtToReceiptTx({
                 senderAddress: request.owner,
                 ptAmount: amount,
                 minSyOut,
@@ -499,8 +538,8 @@ export function createJitterTradeService(
             });
           }
           case "buy_yt": {
-            const syAmountIn = previewInputAmount(quote, "syIn");
-            const ytAmountOut = expectedOutputAmount(quote, "yt");
+            // Fixed-input intent must use the router's live exact-input quote.
+            // Pinning the preview output makes upstream index accrual exhaust the budget.
             const minYtOut = minReceivedAmount(quote, "yt");
             const minSyOut = minReceivedAmount(quote, "sy", 0n);
             if (quote.inputAsset === "underlying") {
@@ -509,8 +548,6 @@ export function createJitterTradeService(
                 underlyingCoinId: request.inputCoinId,
                 underlyingCoinIds: request.inputCoinIds,
                 underlyingAmount: amount,
-                syAmountIn,
-                ytAmountOut,
                 minYtOut,
                 minSyOut,
                 positionId: request.positionId,
@@ -525,8 +562,6 @@ export function createJitterTradeService(
                 marketCoinId: request.inputCoinId,
                 marketCoinIds: request.inputCoinIds,
                 marketCoinAmount: amount,
-                syAmountIn,
-                ytAmountOut,
                 minYtOut,
                 minSyOut,
                 positionId: request.positionId,
@@ -540,7 +575,6 @@ export function createJitterTradeService(
               inputCoinId: requireField(request.inputCoinId, "inputCoinId"),
               inputCoinIds: request.inputCoinIds,
               inputAmount: amount,
-              ytAmountOut,
               minYtOut,
               minSyOut,
               positionId: request.positionId,
@@ -552,8 +586,8 @@ export function createJitterTradeService(
           case "sell_yt": {
             const syOut = previewOutputAmount(quote, "syOut");
             const minSyOut = minPreviewOutputAmount(quote, "syOut");
-            if (await shouldAutoRedeemSyOutput(options, syOut)) {
-              return transactionService.buildSellYtToUnderlyingTx({
+            if (!autoRedeemOutputs && await shouldRedeemReviewedOutput(options, quote, syOut)) {
+              return transactionService.buildSellYtToReceiptTx({
                 senderAddress: request.owner,
                 ytAmount: amount,
                 minSyOut,
@@ -597,6 +631,7 @@ export function createJitterTradeService(
                 underlyingAmount: amount,
                 syToMintHint: previewOutputAmount(quote, "syToMintHint"),
                 minLpOut: minReceivedAmount(quote, "lp"),
+                minYtOut: minReceivedAmount(quote, "yt"),
                 positionId: request.positionId,
                 deadlineMs,
                 syIndex,
@@ -611,6 +646,7 @@ export function createJitterTradeService(
                 marketCoinAmount: amount,
                 syToMintHint: previewOutputAmount(quote, "syToMintHint"),
                 minLpOut: minReceivedAmount(quote, "lp"),
+                minYtOut: minReceivedAmount(quote, "yt"),
                 positionId: request.positionId,
                 deadlineMs,
                 syIndex,
@@ -624,6 +660,7 @@ export function createJitterTradeService(
               inputAmount: amount,
               syToMintHint: previewOutputAmount(quote, "syToMintHint"),
               minLpOut: minReceivedAmount(quote, "lp"),
+              minYtOut: minReceivedAmount(quote, "yt"),
               positionId: request.positionId,
               deadlineMs,
               syIndex,
@@ -687,8 +724,8 @@ export function createJitterTradeService(
             const totalSyOut = previewOutputAmount(quote, "totalSyOut");
             const minTotalSyOut = minPreviewOutputAmount(quote, "totalSyOut");
             const route = executableRemoveLpToSyRoute(quote);
-            if (await shouldAutoRedeemSyOutput(options, totalSyOut)) {
-              return transactionService.buildRemoveLpToUnderlyingTx({
+            if (!autoRedeemOutputs && await shouldRedeemReviewedOutput(options, quote, totalSyOut)) {
+              return transactionService.buildRemoveLpToReceiptTx({
                 senderAddress: request.owner,
                 lpAmount: amount,
                 minSyOut: applySlippage(
@@ -727,7 +764,12 @@ export function createJitterTradeService(
             });
           }
         }
-      })();
+      };
+      const simulate = options.simulateSyOutputs ?? (options.network ? syOutputSimulator(options.network) : null);
+      const autoRedeem = autoRedeemOutputs && simulate;
+      const transaction = autoRedeem
+        ? (await buildWithSyOutputRedemption({ config: options.config, build: buildTransaction, simulate })).transaction
+        : await buildTransaction();
 
       return {
         status: "ready",
@@ -741,7 +783,7 @@ export function createJitterTradeService(
             ? { client: getSuiGrpcClient(options.network) }
             : undefined,
         ),
-        quote,
+        quote: autoRedeem ? receiptOutputQuote(quote) : quote,
       };
     },
   };
@@ -835,6 +877,7 @@ function availableQuoteResponse(
 ): JitterTradeQuoteResponse {
   return {
     status: "available",
+    reviewedRequest: { ...request },
     marketId: request.marketId,
     actionId,
     product: request.product,
@@ -945,6 +988,7 @@ async function resolveSyTradeInput(
   inputAsset: JitterTradeAsset,
   amount: bigint,
   syIndex?: bigint,
+  config?: JitterMarketConfig,
 ): Promise<{ syIn: bigint; syIndex?: bigint }> {
   if (inputAsset === "sy") {
     return { syIn: amount, syIndex };
@@ -955,6 +999,9 @@ async function resolveSyTradeInput(
   }
   if (inputAsset === "marketCoin") {
     const underlying = await quoteService.quoteSyToUnderlying(amount, syIndex);
+    if (config?.haedalAdapterPackageId || config?.emberAdapterPackageId) {
+      return { syIn: underlying.underlyingOut * (1n << 64n) / underlying.syIndex, syIndex: underlying.syIndex };
+    }
     const converted = await quoteService.quoteUnderlyingToSy(
       underlying.underlyingOut,
       underlying.syIndex,
@@ -977,26 +1024,24 @@ function applySlippage(amount: bigint, slippageBps: bigint): bigint {
   return (amount * (BASIS_POINTS - slippageBps)) / BASIS_POINTS;
 }
 
+function receiptOutputQuote(quote: JitterTradeQuoteResponse): JitterTradeQuoteResponse {
+  const receipt = (output: JitterTradeAmount): JitterTradeAmount =>
+    output.asset === "sy" ? { ...output, asset: "marketCoin" } : output;
+  return { ...quote, expectedOutput: quote.expectedOutput.map(receipt), minReceived: quote.minReceived.map(receipt) };
+}
+
 function minReceivedAmount(
   quote: JitterTradeQuoteResponse,
   asset: JitterTradeAsset,
   fallback?: bigint,
 ): bigint {
-  const amount = quote.minReceived.find((candidate) => candidate.asset === asset);
+  const amount = quote.minReceived.find((candidate) => candidate.asset === asset)
+    ?? (asset === "sy" ? quote.minReceived.find(candidate => candidate.asset === "marketCoin") : undefined);
   if (!amount) {
     if (fallback !== undefined) return fallback;
     throw new Error(`Quote is missing min received amount for ${asset}.`);
   }
   return BigInt(amount.amount);
-}
-
-function expectedOutputAmount(
-  quote: JitterTradeQuoteResponse,
-  asset: JitterTradeAsset,
-  fallback = 0n,
-): bigint {
-  const amount = quote.expectedOutput.find((candidate) => candidate.asset === asset);
-  return amount ? BigInt(amount.amount) : fallback;
 }
 
 function previewOutputAmount(
@@ -1006,17 +1051,6 @@ function previewOutputAmount(
   const amount = quote.preview?.output[key];
   if (amount === undefined) {
     throw new Error(`Quote preview is missing output ${key}.`);
-  }
-  return BigInt(amount);
-}
-
-function previewInputAmount(
-  quote: JitterTradeQuoteResponse,
-  key: string,
-): bigint {
-  const amount = quote.preview?.input[key];
-  if (amount === undefined) {
-    throw new Error(`Quote preview is missing input ${key}.`);
   }
   return BigInt(amount);
 }
@@ -1042,33 +1076,27 @@ function executableRemoveLpToSyRoute(
 
 async function quoteSyOutputAmounts(
   options: CreateJitterTradeServiceOptions,
-  quoteService: JitterQuoteService,
   syOut: bigint,
   minSyOut: bigint,
-  syIndex?: bigint,
 ): Promise<{
   expectedOutput: Array<{ asset: JitterTradeAsset; amount: bigint }>;
   minReceived: Array<{ asset: JitterTradeAsset; amount: bigint }>;
 }> {
   if (!(await shouldAutoRedeemSyOutput(options, syOut))) {
+    const kind = detectAdapterKind(options.config);
+    if (options.network && !options.transactionService && syOut > 0n &&
+      (kind === "scallop" || kind === "haedal" || kind === "ember")) {
+      throw new Error("YBA withdrawal capacity is unavailable. Review a new quote before trading.");
+    }
     return {
       expectedOutput: [{ asset: "sy", amount: syOut }],
       minReceived: [{ asset: "sy", amount: minSyOut }],
     };
   }
 
-  const expected = await quoteService.quoteSyToUnderlying(syOut, syIndex);
-  const minimum = await quoteService.quoteSyToUnderlying(
-    minSyOut,
-    expected.syIndex,
-  );
   return {
-    expectedOutput: [
-      { asset: "underlying", amount: expected.underlyingOut },
-    ],
-    minReceived: [
-      { asset: "underlying", amount: minimum.underlyingOut },
-    ],
+    expectedOutput: [{ asset: "marketCoin", amount: syOut }],
+    minReceived: [{ asset: "marketCoin", amount: minSyOut }],
   };
 }
 
@@ -1117,6 +1145,7 @@ async function resolveTradeLpReferralRecords(
     owner: request.owner,
     positionId: request.positionId,
     pointPrograms,
+    extensionsPackageId: options.config.jitterExtensionsPackageId,
   });
 }
 
@@ -1141,6 +1170,7 @@ async function resolveTradeYtReferralRecords(
     owner: request.owner,
     positionId: request.positionId,
     pointPrograms,
+    extensionsPackageId: options.config.jitterExtensionsPackageId,
   });
 }
 
@@ -1165,7 +1195,9 @@ async function shouldAutoRedeemSyOutput(
 ): Promise<boolean> {
   if (syAmount <= 0n) return false;
   if (!options.network) return false;
-  const vaultId = options.config.scallopMarketVaultObjectId;
+  const isHaedal = Boolean(options.config.haedalAdapterPackageId);
+  const isReceipt = isHaedal || Boolean(options.config.emberAdapterPackageId);
+  const vaultId = options.config.emberAdapterPackageId ? options.config.emberMarketVaultObjectId : isHaedal ? options.config.haedalMarketVaultObjectId : options.config.scallopMarketVaultObjectId;
   if (!vaultId) return false;
 
   try {
@@ -1175,72 +1207,19 @@ async function shouldAutoRedeemSyOutput(
     });
     const fields = object.object.json as Record<string, unknown> | null;
     if (!fields) return false;
-    return resolveScallopRemainingQuota(fields, Date.now()) >= syAmount;
+    return resolveReceiptWithdrawalCapacity(fields, Date.now(), {
+      balance: isReceipt ? "receipt_balance" : "market_coin_balance", queued: isReceipt ? "queued_receipt" : "queued_market_coin",
+    }) >= syAmount;
   } catch {
     return false;
   }
 }
 
-function resolveScallopRemainingQuota(
-  fields: Record<string, unknown>,
-  nowMs: number,
-): bigint {
-  const windowMs = readNumberField(fields, "withdraw_window_ms");
-  const windowStartMs = readNumberField(fields, "withdraw_window_start_ms");
-  const bpsPerWindow = readBigIntField(fields, "withdraw_bps_per_window");
-  const reserveRaw = readBalanceLikeField(fields, "market_coin_balance");
-  let baseReserve = readBigIntField(fields, "withdraw_window_base_reserve");
-  let withdrawn = readBigIntField(fields, "withdraw_window_withdrawn");
-
-  if (
-    windowMs > 0 &&
-    windowStartMs > 0 &&
-    nowMs >= windowStartMs &&
-    nowMs - windowStartMs >= windowMs
-  ) {
-    baseReserve = reserveRaw;
-    withdrawn = 0n;
-  }
-
-  if (bpsPerWindow <= 0n || baseReserve <= 0n) return 0n;
-  const quota = (baseReserve * bpsPerWindow) / BASIS_POINTS;
-  return quota > withdrawn ? quota - withdrawn : 0n;
-}
-
-function readNumberField(fields: Record<string, unknown>, key: string): number {
-  const raw = fields[key];
-  const value =
-    typeof raw === "string" || typeof raw === "number" ? Number(raw) : 0;
-  return Number.isFinite(value) ? value : 0;
-}
-
-function readBigIntField(fields: Record<string, unknown>, key: string): bigint {
-  const raw = fields[key];
-  try {
-    if (typeof raw === "bigint") return raw;
-    if (typeof raw === "number" || typeof raw === "string") return BigInt(raw);
-  } catch {
-    return 0n;
-  }
-  return 0n;
-}
-
-function readBalanceLikeField(
-  fields: Record<string, unknown>,
-  key: string,
-): bigint {
-  const raw = fields[key];
-  try {
-    if (typeof raw === "bigint") return raw;
-    if (typeof raw === "string" || typeof raw === "number") return BigInt(raw);
-    if (!raw || typeof raw !== "object") return 0n;
-    const record = raw as Record<string, unknown>;
-    const nested = record.value ?? (record.fields as Record<string, unknown> | undefined)?.value;
-    if (typeof nested === "string" || typeof nested === "number" || typeof nested === "bigint") {
-      return BigInt(nested);
-    }
-  } catch {
-    return 0n;
-  }
-  return 0n;
+async function shouldRedeemReviewedOutput(options: CreateJitterTradeServiceOptions,
+  quote: JitterTradeQuoteResponse, syOut: bigint): Promise<boolean> {
+  const asset = "marketCoin";
+  if (!quote.expectedOutput.some(output => output.asset === asset)) return false;
+  if (!(await shouldAutoRedeemSyOutput(options, syOut)))
+    throw new Error("Withdrawal capacity changed. Review a new quote; the output asset will not be silently changed.");
+  return true;
 }

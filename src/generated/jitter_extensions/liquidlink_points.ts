@@ -32,8 +32,12 @@ export const PointConfig = new MoveStruct({ name: `${$moduleName}::PointConfig`,
         lp_multiplier_bps: bcs.u64(),
         duration: bcs.u64(),
         enabled: bcs.bool(),
+        closed: bcs.bool(),
+        closed_at_ms: bcs.u64(),
         total_yt_amount: bcs.u256(),
         total_yt_base: bcs.u256(),
+        /** Attachment-time YT not yet materialized into per-position records. */
+        uncheckpointed_yt: bcs.u256(),
         config_version: bcs.u64(),
         /**
          * YT-only configuration history. Market accumulators replay this history lazily so
@@ -50,6 +54,7 @@ export const PointConfig = new MoveStruct({ name: `${$moduleName}::PointConfig`,
     } });
 export const LpPointState = new MoveStruct({ name: `${$moduleName}::LpPointState<phantom SY>`, fields: {
         id: bcs.Address,
+        initialized: bcs.bool(),
         lp_rewarder_uid: bcs.Address,
         pool_rewarder_uid: bcs.Address,
         point_config_id: bcs.Address,
@@ -77,7 +82,8 @@ export const LpPointState = new MoveStruct({ name: `${$moduleName}::LpPointState
         acc_point_remainder: bcs.u256(),
         /**
          * Fractional pool points carried across checkpoints. The value is the remainder of
-         * the pre-division point numerator over `BPS_DENOMINATOR * PointConfig.duration`.
+         * the pre-division point numerator over
+         * `BPS_DENOMINATOR^2 * PointConfig.duration`.
          */
         point_numerator_remainder: bcs.u256(),
         /**
@@ -86,7 +92,14 @@ export const LpPointState = new MoveStruct({ name: `${$moduleName}::LpPointState
          */
         point_fraction_remainder_q128: bcs.u256(),
         last_updated_ms: bcs.u64(),
-        total_lp_points_accrued: bcs.u64(),
+        /** Observability only. Saturation must never prevent settlement or exit. */
+        total_lp_points_accrued: bcs.u128(),
+        total_lp_points_saturated: bcs.bool(),
+        /**
+         * Supply at the last synchronized cohort boundary, including zero-time
+         * post-mutation operations. Position records also detect ownership changes.
+         */
+        last_lp_supply: bcs.u64(),
         point_config_version: bcs.u64(),
         reward_attached: bcs.bool()
     } });
@@ -97,6 +110,33 @@ export const LpConfigVersion = new MoveStruct({ name: `${$moduleName}::LpConfigV
         duration: bcs.u64(),
         enabled: bcs.bool()
     } });
+export const LpHistoryRepairKey = new MoveTuple({ name: `${$moduleName}::LpHistoryRepairKey`, fields: [bcs.u64()] });
+export const LpHistoryRepair = new MoveStruct({ name: `${$moduleName}::LpHistoryRepair`, fields: {
+        from_ms: bcs.u64(),
+        until_ms: bcs.u64(),
+        multiplier_bps: bcs.u64(),
+        duration: bcs.u64(),
+        reason: bcs.vector(bcs.u8())
+    } });
+export const LpHistoryRepairedEvent = new MoveStruct({ name: `${$moduleName}::LpHistoryRepairedEvent`, fields: {
+        state_id: bcs.Address,
+        config_id: bcs.Address,
+        version: bcs.u64(),
+        from_ms: bcs.u64(),
+        until_ms: bcs.u64(),
+        old_multiplier_bps: bcs.u64(),
+        new_multiplier_bps: bcs.u64(),
+        old_duration: bcs.u64(),
+        new_duration: bcs.u64(),
+        reason: bcs.vector(bcs.u8())
+    } });
+export const LpCarryRetiredEvent = new MoveStruct({ name: `${$moduleName}::LpCarryRetiredEvent`, fields: {
+        state_id: bcs.Address,
+        acc_point_remainder: bcs.u256(),
+        point_numerator_remainder: bcs.u256(),
+        point_fraction_remainder_q128: bcs.u256(),
+        config_version: bcs.u64()
+    } });
 export const YtConfigVersionKey = new MoveTuple({ name: `${$moduleName}::YtConfigVersionKey`, fields: [bcs.u64()] });
 export const YtConfigVersion = new MoveStruct({ name: `${$moduleName}::YtConfigVersion`, fields: {
         effective_at_ms: bcs.u64(),
@@ -106,6 +146,7 @@ export const YtConfigVersion = new MoveStruct({ name: `${$moduleName}::YtConfigV
     } });
 export const UserKey = new MoveTuple({ name: `${$moduleName}::UserKey`, fields: [bcs.Address] });
 export const PositionKey = new MoveTuple({ name: `${$moduleName}::PositionKey`, fields: [bcs.Address] });
+export const ClosedPositionKey = new MoveTuple({ name: `${$moduleName}::ClosedPositionKey`, fields: [bcs.Address] });
 export const LpReferralRecordKey = new MoveTuple({ name: `${$moduleName}::LpReferralRecordKey`, fields: [bcs.Address] });
 export const YtReferralRecordKey = new MoveTuple({ name: `${$moduleName}::YtReferralRecordKey`, fields: [bcs.Address] });
 export const YtPointWeightKey = new MoveTuple({ name: `${$moduleName}::YtPointWeightKey`, fields: [bcs.Address] });
@@ -142,6 +183,9 @@ export const YtPositionContribution = new MoveStruct({ name: `${$moduleName}::Yt
 export const YtMarketExposure = new MoveStruct({ name: `${$moduleName}::YtMarketExposure`, fields: {
         yt_amount: bcs.u256(),
         yt_base: bcs.u256(),
+        uncheckpointed_yt: bcs.u256(),
+        attachment_acc: bcs.u256(),
+        attachment_ms: bcs.u64(),
         acc_point_per_base: bcs.u256(),
         point_numerator_remainder: bcs.u256(),
         last_updated_ms: bcs.u64(),
@@ -195,6 +239,12 @@ export const PointConfigUpdatedEvent = new MoveStruct({ name: `${$moduleName}::P
         yt_config_version: bcs.u64(),
         lp_config_version: bcs.u64()
     } });
+export const PointConfigClosedEvent = new MoveStruct({ name: `${$moduleName}::PointConfigClosedEvent`, fields: {
+        config_id: bcs.Address,
+        closed_at_ms: bcs.u64(),
+        yt_config_version: bcs.u64(),
+        lp_config_version: bcs.u64()
+    } });
 export const LpPointStateCreatedEvent = new MoveStruct({ name: `${$moduleName}::LpPointStateCreatedEvent`, fields: {
         state_id: bcs.Address,
         config_id: bcs.Address,
@@ -245,7 +295,8 @@ export const LpPointAccumulatorUpdatedEvent = new MoveStruct({ name: `${$moduleN
         elapsed_ms: bcs.u64(),
         total_sy: bcs.u64(),
         circulating_lp_supply: bcs.u64(),
-        points_accrued: bcs.u64(),
+        points_accrued: bcs.u128(),
+        total_saturated: bcs.bool(),
         point_numerator_remainder: bcs.u256(),
         acc_point_remainder: bcs.u256(),
         acc_point_per_lp: bcs.u128()
@@ -495,6 +546,70 @@ export function repairMultipliersByAdmin(options: RepairMultipliersByAdminOption
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
+export interface RepairLpHistoryArguments {
+    config: RawTransactionArgument<string>;
+    state: RawTransactionArgument<string>;
+    pool: RawTransactionArgument<string>;
+    globalConfig: RawTransactionArgument<string>;
+    AdminCap: RawTransactionArgument<string>;
+    expectedConfigVersion: RawTransactionArgument<number | bigint>;
+    expectedStateVersion: RawTransactionArgument<number | bigint>;
+    expectedCursorMs: RawTransactionArgument<number | bigint>;
+    multiplierBps: RawTransactionArgument<number | bigint>;
+    duration: RawTransactionArgument<number | bigint>;
+    reason: RawTransactionArgument<Array<number>>;
+}
+export interface RepairLpHistoryOptions {
+    package?: string;
+    arguments: RepairLpHistoryArguments | [
+        config: RawTransactionArgument<string>,
+        state: RawTransactionArgument<string>,
+        pool: RawTransactionArgument<string>,
+        globalConfig: RawTransactionArgument<string>,
+        AdminCap: RawTransactionArgument<string>,
+        expectedConfigVersion: RawTransactionArgument<number | bigint>,
+        expectedStateVersion: RawTransactionArgument<number | bigint>,
+        expectedCursorMs: RawTransactionArgument<number | bigint>,
+        multiplierBps: RawTransactionArgument<number | bigint>,
+        duration: RawTransactionArgument<number | bigint>,
+        reason: RawTransactionArgument<Array<number>>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+/**
+ * Correct only this state's unprocessed historical interval, then replay it
+ * atomically. First append the desired live configuration with the ordinary
+ * setter. A failed replay rolls back both the override and its event.
+ */
+export function repairLpHistory(options: RepairLpHistoryOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        null,
+        'u64',
+        'u64',
+        'u64',
+        'u64',
+        'u64',
+        'vector<u8>',
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["config", "state", "pool", "globalConfig", "AdminCap", "expectedConfigVersion", "expectedStateVersion", "expectedCursorMs", "multiplierBps", "duration", "reason"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'repair_lp_history',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
 export interface SetEnabledByAclArguments {
     config: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
@@ -556,6 +671,84 @@ export function setEnabledByAdmin(options: SetEnabledByAdminOptions) {
         package: packageAddress,
         module: 'liquidlink_points',
         function: 'set_enabled_by_admin',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface CloseByAdminArguments {
+    config: RawTransactionArgument<string>;
+    globalConfig: RawTransactionArgument<string>;
+    AdminCap: RawTransactionArgument<string>;
+}
+export interface CloseByAdminOptions {
+    package?: string;
+    arguments: CloseByAdminArguments | [
+        config: RawTransactionArgument<string>,
+        globalConfig: RawTransactionArgument<string>,
+        AdminCap: RawTransactionArgument<string>
+    ];
+}
+/**
+ * Terminal campaign close. Historical YT/LP accrual remains claimable after lazy
+ * checkpoints replay the disabled versions written at this timestamp.
+ */
+export function closeByAdmin(options: CloseByAdminOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["config", "globalConfig", "AdminCap"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'close_by_admin',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface CloseReferralCampaignByAdminArguments {
+    config: RawTransactionArgument<string>;
+    globalConfig: RawTransactionArgument<string>;
+    adminCap: RawTransactionArgument<string>;
+    liquidlinkConfig: RawTransactionArgument<string>;
+    projectCap: RawTransactionArgument<string>;
+    project: RawTransactionArgument<string>;
+    scoreboard: RawTransactionArgument<string>;
+    referralState: RawTransactionArgument<string>;
+}
+export interface CloseReferralCampaignByAdminOptions {
+    package?: string;
+    arguments: CloseReferralCampaignByAdminArguments | [
+        config: RawTransactionArgument<string>,
+        globalConfig: RawTransactionArgument<string>,
+        adminCap: RawTransactionArgument<string>,
+        liquidlinkConfig: RawTransactionArgument<string>,
+        projectCap: RawTransactionArgument<string>,
+        project: RawTransactionArgument<string>,
+        scoreboard: RawTransactionArgument<string>,
+        referralState: RawTransactionArgument<string>
+    ];
+}
+/** Atomically close the base point program and its referral campaign. */
+export function closeReferralCampaignByAdmin(options: CloseReferralCampaignByAdminOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["config", "globalConfig", "adminCap", "liquidlinkConfig", "projectCap", "project", "scoreboard", "referralState"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'close_referral_campaign_by_admin',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
@@ -724,7 +917,7 @@ export interface DetachYtRewarderByAdminArguments {
     pointConfig: RawTransactionArgument<string>;
     scoreboard: RawTransactionArgument<string>;
     market: RawTransactionArgument<string>;
-    adminCap: RawTransactionArgument<string>;
+    AdminCap: RawTransactionArgument<string>;
 }
 export interface DetachYtRewarderByAdminOptions {
     package?: string;
@@ -734,7 +927,7 @@ export interface DetachYtRewarderByAdminOptions {
         pointConfig: RawTransactionArgument<string>,
         scoreboard: RawTransactionArgument<string>,
         market: RawTransactionArgument<string>,
-        adminCap: RawTransactionArgument<string>
+        AdminCap: RawTransactionArgument<string>
     ];
     typeArguments: [
         string,
@@ -743,8 +936,8 @@ export interface DetachYtRewarderByAdminOptions {
     ];
 }
 /**
- * Stop this Scoreboard's YT accrual for one market and remove it from future
- * reward operations. Historical points remain available through manual sync.
+ * Stop YT accrual, retaining a zero-emission settlement tail. Legacy positions
+ * must materialize historical rights before a burn or owner transition.
  */
 export function detachYtRewarderByAdmin(options: DetachYtRewarderByAdminOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-extensions';
@@ -757,7 +950,7 @@ export function detachYtRewarderByAdmin(options: DetachYtRewarderByAdminOptions)
         null,
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["distributor", "globalConfig", "pointConfig", "scoreboard", "market", "adminCap"];
+    const parameterNames = ["distributor", "globalConfig", "pointConfig", "scoreboard", "market", "AdminCap"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'liquidlink_points',
@@ -872,6 +1065,495 @@ export function detachLpPointRewardersByAdmin(options: DetachLpPointRewardersByA
         package: packageAddress,
         module: 'liquidlink_points',
         function: 'detach_lp_point_rewarders_by_admin',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface SettleClosedYtArguments {
+    globalConfig: RawTransactionArgument<string>;
+    pointConfig: RawTransactionArgument<string>;
+    distributor: RawTransactionArgument<string>;
+    operation: RawTransactionArgument<string>;
+    position: RawTransactionArgument<string>;
+    market: RawTransactionArgument<string>;
+}
+export interface SettleClosedYtOptions {
+    package?: string;
+    arguments: SettleClosedYtArguments | [
+        globalConfig: RawTransactionArgument<string>,
+        pointConfig: RawTransactionArgument<string>,
+        distributor: RawTransactionArgument<string>,
+        operation: RawTransactionArgument<string>,
+        position: RawTransactionArgument<string>,
+        market: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+/**
+ * Closed programs still authenticate every core operation, but do not require
+ * Liquidlink availability to preserve their final rights and release principal.
+ */
+export function settleClosedYt(options: SettleClosedYtOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["globalConfig", "pointConfig", "distributor", "operation", "position", "market"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'settle_closed_yt',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface SettleClosedLpArguments {
+    globalConfig: RawTransactionArgument<string>;
+    pointConfig: RawTransactionArgument<string>;
+    lpPointState: RawTransactionArgument<string>;
+    distributor: RawTransactionArgument<string>;
+    operation: RawTransactionArgument<string>;
+    position: RawTransactionArgument<string>;
+    market: RawTransactionArgument<string>;
+}
+export interface SettleClosedLpOptions {
+    package?: string;
+    arguments: SettleClosedLpArguments | [
+        globalConfig: RawTransactionArgument<string>,
+        pointConfig: RawTransactionArgument<string>,
+        lpPointState: RawTransactionArgument<string>,
+        distributor: RawTransactionArgument<string>,
+        operation: RawTransactionArgument<string>,
+        position: RawTransactionArgument<string>,
+        market: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+export function settleClosedLp(options: SettleClosedLpOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["globalConfig", "pointConfig", "lpPointState", "distributor", "operation", "position", "market"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'settle_closed_lp',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface SettleClosedYtWithReferralArguments {
+    globalConfig: RawTransactionArgument<string>;
+    pointConfig: RawTransactionArgument<string>;
+    distributor: RawTransactionArgument<string>;
+    operation: RawTransactionArgument<string>;
+    referralState: RawTransactionArgument<string>;
+    referralRecord: RawTransactionArgument<string>;
+    position: RawTransactionArgument<string>;
+    market: RawTransactionArgument<string>;
+}
+export interface SettleClosedYtWithReferralOptions {
+    package?: string;
+    arguments: SettleClosedYtWithReferralArguments | [
+        globalConfig: RawTransactionArgument<string>,
+        pointConfig: RawTransactionArgument<string>,
+        distributor: RawTransactionArgument<string>,
+        operation: RawTransactionArgument<string>,
+        referralState: RawTransactionArgument<string>,
+        referralRecord: RawTransactionArgument<string>,
+        position: RawTransactionArgument<string>,
+        market: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+export function settleClosedYtWithReferral(options: SettleClosedYtWithReferralOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["globalConfig", "pointConfig", "distributor", "operation", "referralState", "referralRecord", "position", "market"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'settle_closed_yt_with_referral',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface SettleClosedLpWithReferralArguments {
+    globalConfig: RawTransactionArgument<string>;
+    pointConfig: RawTransactionArgument<string>;
+    lpPointState: RawTransactionArgument<string>;
+    distributor: RawTransactionArgument<string>;
+    operation: RawTransactionArgument<string>;
+    referralState: RawTransactionArgument<string>;
+    referralRecord: RawTransactionArgument<string>;
+    position: RawTransactionArgument<string>;
+    market: RawTransactionArgument<string>;
+}
+export interface SettleClosedLpWithReferralOptions {
+    package?: string;
+    arguments: SettleClosedLpWithReferralArguments | [
+        globalConfig: RawTransactionArgument<string>,
+        pointConfig: RawTransactionArgument<string>,
+        lpPointState: RawTransactionArgument<string>,
+        distributor: RawTransactionArgument<string>,
+        operation: RawTransactionArgument<string>,
+        referralState: RawTransactionArgument<string>,
+        referralRecord: RawTransactionArgument<string>,
+        position: RawTransactionArgument<string>,
+        market: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+export function settleClosedLpWithReferral(options: SettleClosedLpWithReferralOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["globalConfig", "pointConfig", "lpPointState", "distributor", "operation", "referralState", "referralRecord", "position", "market"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'settle_closed_lp_with_referral',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface CheckpointClosedYtArguments {
+    pointConfig: RawTransactionArgument<string>;
+    globalConfig: RawTransactionArgument<string>;
+    position: RawTransactionArgument<string>;
+    market: RawTransactionArgument<string>;
+}
+export interface CheckpointClosedYtOptions {
+    package?: string;
+    arguments: CheckpointClosedYtArguments | [
+        pointConfig: RawTransactionArgument<string>,
+        globalConfig: RawTransactionArgument<string>,
+        position: RawTransactionArgument<string>,
+        market: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+export function checkpointClosedYt(options: CheckpointClosedYtOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["pointConfig", "globalConfig", "position", "market"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'checkpoint_closed_yt',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface CheckpointClosedLpArguments {
+    pointConfig: RawTransactionArgument<string>;
+    lpPointState: RawTransactionArgument<string>;
+    globalConfig: RawTransactionArgument<string>;
+    position: RawTransactionArgument<string>;
+    market: RawTransactionArgument<string>;
+}
+export interface CheckpointClosedLpOptions {
+    package?: string;
+    arguments: CheckpointClosedLpArguments | [
+        pointConfig: RawTransactionArgument<string>,
+        lpPointState: RawTransactionArgument<string>,
+        globalConfig: RawTransactionArgument<string>,
+        position: RawTransactionArgument<string>,
+        market: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+export function checkpointClosedLp(options: CheckpointClosedLpOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        null,
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["pointConfig", "lpPointState", "globalConfig", "position", "market"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'checkpoint_closed_lp',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface CheckpointClosedYtWithReferralArguments {
+    pointConfig: RawTransactionArgument<string>;
+    globalConfig: RawTransactionArgument<string>;
+    referralState: RawTransactionArgument<string>;
+    referralRecord: RawTransactionArgument<string>;
+    position: RawTransactionArgument<string>;
+    market: RawTransactionArgument<string>;
+}
+export interface CheckpointClosedYtWithReferralOptions {
+    package?: string;
+    arguments: CheckpointClosedYtWithReferralArguments | [
+        pointConfig: RawTransactionArgument<string>,
+        globalConfig: RawTransactionArgument<string>,
+        referralState: RawTransactionArgument<string>,
+        referralRecord: RawTransactionArgument<string>,
+        position: RawTransactionArgument<string>,
+        market: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+export function checkpointClosedYtWithReferral(options: CheckpointClosedYtWithReferralOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["pointConfig", "globalConfig", "referralState", "referralRecord", "position", "market"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'checkpoint_closed_yt_with_referral',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface CheckpointClosedLpWithReferralArguments {
+    pointConfig: RawTransactionArgument<string>;
+    lpPointState: RawTransactionArgument<string>;
+    globalConfig: RawTransactionArgument<string>;
+    referralState: RawTransactionArgument<string>;
+    referralRecord: RawTransactionArgument<string>;
+    position: RawTransactionArgument<string>;
+    market: RawTransactionArgument<string>;
+}
+export interface CheckpointClosedLpWithReferralOptions {
+    package?: string;
+    arguments: CheckpointClosedLpWithReferralArguments | [
+        pointConfig: RawTransactionArgument<string>,
+        lpPointState: RawTransactionArgument<string>,
+        globalConfig: RawTransactionArgument<string>,
+        referralState: RawTransactionArgument<string>,
+        referralRecord: RawTransactionArgument<string>,
+        position: RawTransactionArgument<string>,
+        market: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+export function checkpointClosedLpWithReferral(options: CheckpointClosedLpWithReferralOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["pointConfig", "lpPointState", "globalConfig", "referralState", "referralRecord", "position", "market"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'checkpoint_closed_lp_with_referral',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface ClaimClosedPointsArguments {
+    globalConfig: RawTransactionArgument<string>;
+    liquidlinkGlobalConfig: RawTransactionArgument<string>;
+    pointConfig: RawTransactionArgument<string>;
+    project: RawTransactionArgument<string>;
+    claim: RawTransactionArgument<string>;
+}
+export interface ClaimClosedPointsOptions {
+    package?: string;
+    arguments: ClaimClosedPointsArguments | [
+        globalConfig: RawTransactionArgument<string>,
+        liquidlinkGlobalConfig: RawTransactionArgument<string>,
+        pointConfig: RawTransactionArgument<string>,
+        project: RawTransactionArgument<string>,
+        claim: RawTransactionArgument<string>
+    ];
+}
+/**
+ * Materialization remains subject to Liquidlink source authorization and the
+ * complete ordered policy pipeline. The original Position is not required.
+ */
+export function claimClosedPoints(options: ClaimClosedPointsOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["globalConfig", "liquidlinkGlobalConfig", "pointConfig", "project", "claim"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'claim_closed_points',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface DestroyEmptyClaimArguments {
+    globalConfig: RawTransactionArgument<string>;
+    liquidlinkGlobalConfig: RawTransactionArgument<string>;
+    claim: RawTransactionArgument<string>;
+}
+export interface DestroyEmptyClaimOptions {
+    package?: string;
+    arguments: DestroyEmptyClaimArguments | [
+        globalConfig: RawTransactionArgument<string>,
+        liquidlinkGlobalConfig: RawTransactionArgument<string>,
+        claim: RawTransactionArgument<string>
+    ];
+}
+/** Cleanup of previously exhausted claims never discards whole-point rights. */
+export function destroyEmptyClaim(options: DestroyEmptyClaimOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["globalConfig", "liquidlinkGlobalConfig", "claim"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'destroy_empty_claim',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface YtPositionArchivedArguments {
+    config: RawTransactionArgument<string>;
+    positionId: RawTransactionArgument<string>;
+}
+export interface YtPositionArchivedOptions {
+    package?: string;
+    arguments: YtPositionArchivedArguments | [
+        config: RawTransactionArgument<string>,
+        positionId: RawTransactionArgument<string>
+    ];
+}
+export function ytPositionArchived(options: YtPositionArchivedOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        '0x2::object::ID'
+    ] satisfies (string | null)[];
+    const parameterNames = ["config", "positionId"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'yt_position_archived',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface LpPositionArchivedArguments {
+    state: RawTransactionArgument<string>;
+    positionId: RawTransactionArgument<string>;
+}
+export interface LpPositionArchivedOptions {
+    package?: string;
+    arguments: LpPositionArchivedArguments | [
+        state: RawTransactionArgument<string>,
+        positionId: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string
+    ];
+}
+export function lpPositionArchived(options: LpPositionArchivedOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        '0x2::object::ID'
+    ] satisfies (string | null)[];
+    const parameterNames = ["state", "positionId"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'lp_position_archived',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });
@@ -1238,15 +1920,15 @@ export function checkpointLpConfigToVersion(options: CheckpointLpConfigToVersion
         typeArguments: options.typeArguments
     });
 }
-export interface RefreshPoolLpPointsWithPointsArguments {
+export interface CheckpointLpPoolArguments {
     pointConfig: RawTransactionArgument<string>;
     lpPointState: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
     market: RawTransactionArgument<string>;
 }
-export interface RefreshPoolLpPointsWithPointsOptions {
+export interface CheckpointLpPoolOptions {
     package?: string;
-    arguments: RefreshPoolLpPointsWithPointsArguments | [
+    arguments: CheckpointLpPoolArguments | [
         pointConfig: RawTransactionArgument<string>,
         lpPointState: RawTransactionArgument<string>,
         globalConfig: RawTransactionArgument<string>,
@@ -1258,7 +1940,7 @@ export interface RefreshPoolLpPointsWithPointsOptions {
         string
     ];
 }
-export function refreshPoolLpPointsWithPoints(options: RefreshPoolLpPointsWithPointsOptions) {
+export function checkpointLpPool(options: CheckpointLpPoolOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-extensions';
     const argumentsTypes = [
         null,
@@ -1271,12 +1953,12 @@ export function refreshPoolLpPointsWithPoints(options: RefreshPoolLpPointsWithPo
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'liquidlink_points',
-        function: 'refresh_pool_lp_points_with_points',
+        function: 'checkpoint_lp_pool',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });
 }
-export interface ClaimLpPointsWithPointsArguments {
+export interface ClaimLpPointsArguments {
     pointConfig: RawTransactionArgument<string>;
     lpPointState: RawTransactionArgument<string>;
     project: RawTransactionArgument<string>;
@@ -1285,9 +1967,9 @@ export interface ClaimLpPointsWithPointsArguments {
     market: RawTransactionArgument<string>;
     position: RawTransactionArgument<string>;
 }
-export interface ClaimLpPointsWithPointsOptions {
+export interface ClaimLpPointsOptions {
     package?: string;
-    arguments: ClaimLpPointsWithPointsArguments | [
+    arguments: ClaimLpPointsArguments | [
         pointConfig: RawTransactionArgument<string>,
         lpPointState: RawTransactionArgument<string>,
         project: RawTransactionArgument<string>,
@@ -1309,7 +1991,7 @@ export interface ClaimLpPointsWithPointsOptions {
  * while detached, so this can only materialize points earned before the detach
  * checkpoint.
  */
-export function claimLpPointsWithPoints(options: ClaimLpPointsWithPointsOptions) {
+export function claimLpPoints(options: ClaimLpPointsOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-extensions';
     const argumentsTypes = [
         null,
@@ -1325,12 +2007,12 @@ export function claimLpPointsWithPoints(options: ClaimLpPointsWithPointsOptions)
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'liquidlink_points',
-        function: 'claim_lp_points_with_points',
+        function: 'claim_lp_points',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });
 }
-export interface SyncPyPositionWithPointsArguments {
+export interface CheckpointYtArguments {
     pointConfig: RawTransactionArgument<string>;
     project: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
@@ -1338,9 +2020,9 @@ export interface SyncPyPositionWithPointsArguments {
     position: RawTransactionArgument<string>;
     pyState: RawTransactionArgument<string>;
 }
-export interface SyncPyPositionWithPointsOptions {
+export interface CheckpointYtOptions {
     package?: string;
-    arguments: SyncPyPositionWithPointsArguments | [
+    arguments: CheckpointYtArguments | [
         pointConfig: RawTransactionArgument<string>,
         project: RawTransactionArgument<string>,
         globalConfig: RawTransactionArgument<string>,
@@ -1354,7 +2036,7 @@ export interface SyncPyPositionWithPointsOptions {
         string
     ];
 }
-export function syncPyPositionWithPoints(options: SyncPyPositionWithPointsOptions) {
+export function checkpointYt(options: CheckpointYtOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-extensions';
     const argumentsTypes = [
         null,
@@ -1369,7 +2051,7 @@ export function syncPyPositionWithPoints(options: SyncPyPositionWithPointsOption
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'liquidlink_points',
-        function: 'sync_py_position_with_points',
+        function: 'checkpoint_yt',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });
@@ -1462,6 +2144,50 @@ export function enabled(options: EnabledOptions) {
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
+export interface ClosedArguments {
+    config: RawTransactionArgument<string>;
+}
+export interface ClosedOptions {
+    package?: string;
+    arguments: ClosedArguments | [
+        config: RawTransactionArgument<string>
+    ];
+}
+export function closed(options: ClosedOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["config"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'closed',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface ClosedAtMsArguments {
+    config: RawTransactionArgument<string>;
+}
+export interface ClosedAtMsOptions {
+    package?: string;
+    arguments: ClosedAtMsArguments | [
+        config: RawTransactionArgument<string>
+    ];
+}
+export function closedAtMs(options: ClosedAtMsOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["config"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'closed_at_ms',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
 export interface ScoreboardIdArguments {
     config: RawTransactionArgument<string>;
 }
@@ -1547,6 +2273,28 @@ export function totalYtBase(options: TotalYtBaseOptions) {
         package: packageAddress,
         module: 'liquidlink_points',
         function: 'total_yt_base',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface UncheckpointedYtArguments {
+    config: RawTransactionArgument<string>;
+}
+export interface UncheckpointedYtOptions {
+    package?: string;
+    arguments: UncheckpointedYtArguments | [
+        config: RawTransactionArgument<string>
+    ];
+}
+export function uncheckpointedYt(options: UncheckpointedYtOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["config"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'uncheckpointed_yt',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
@@ -1971,6 +2719,32 @@ export function totalLpPointsAccrued(options: TotalLpPointsAccruedOptions) {
         package: packageAddress,
         module: 'liquidlink_points',
         function: 'total_lp_points_accrued',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface TotalLpPointsSaturatedArguments {
+    state: RawTransactionArgument<string>;
+}
+export interface TotalLpPointsSaturatedOptions {
+    package?: string;
+    arguments: TotalLpPointsSaturatedArguments | [
+        state: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string
+    ];
+}
+export function totalLpPointsSaturated(options: TotalLpPointsSaturatedOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["state"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'liquidlink_points',
+        function: 'total_lp_points_saturated',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });
@@ -2592,6 +3366,7 @@ export interface RegisterLpReferralSourceByProjectCapArguments {
     liquidlinkGlobalConfig: RawTransactionArgument<string>;
     projectCap: RawTransactionArgument<string>;
     project: RawTransactionArgument<string>;
+    pointConfig: RawTransactionArgument<string>;
     lpPointState: RawTransactionArgument<string>;
 }
 export interface RegisterLpReferralSourceByProjectCapOptions {
@@ -2601,6 +3376,7 @@ export interface RegisterLpReferralSourceByProjectCapOptions {
         liquidlinkGlobalConfig: RawTransactionArgument<string>,
         projectCap: RawTransactionArgument<string>,
         project: RawTransactionArgument<string>,
+        pointConfig: RawTransactionArgument<string>,
         lpPointState: RawTransactionArgument<string>
     ];
     typeArguments: [
@@ -2614,9 +3390,10 @@ export function registerLpReferralSourceByProjectCap(options: RegisterLpReferral
         null,
         null,
         null,
+        null,
         null
     ] satisfies (string | null)[];
-    const parameterNames = ["globalConfig", "liquidlinkGlobalConfig", "projectCap", "project", "lpPointState"];
+    const parameterNames = ["globalConfig", "liquidlinkGlobalConfig", "projectCap", "project", "pointConfig", "lpPointState"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'liquidlink_points',
@@ -2931,11 +3708,9 @@ export interface DetachLpReferralRecordWithPointsOptions {
     ];
 }
 /**
- * Settle and detach all owner-bound LP referral accounting before an empty
- * position is transferred or destroyed. Whole points are paid to the old
- * referee/referrer; unrepresentable sub-point dust is explicitly reported and
- * forfeited. The position transfer lock is released only after both records and
- * the marker have been closed.
+ * Claim the referee's points and apply the Project's ordered policies before
+ * detaching. This entry emits no Stamp and rejects unclaimed whole points; it pays
+ * the independent referrer bonus and forfeits only sub-point dust.
  */
 export function detachLpReferralRecordWithPoints(options: DetachLpReferralRecordWithPointsOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-extensions';

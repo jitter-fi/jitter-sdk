@@ -114,6 +114,16 @@ describe("SDK ports", () => {
           updatedAtMs: "1710000000000",
         } satisfies MarketAnalyticsResult;
       },
+      async getMarketMetadata(query) {
+        return {
+          marketId: query.marketId,
+          source: "indexer",
+          marketCreatedAtMs: "1710000000000",
+          poolCreatedAtMs: "1710000120000",
+          firstSeenAtMs: "1710000000000",
+          updatedAtMs: "1710000120000",
+        };
+      },
       async getMarketChart(query) {
         return {
           marketId: query.marketId,

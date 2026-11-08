@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import { getJitterAdapterManifest } from "../adapters/registry.js";
 import { DEFAULT_DEMO_SY_INDEX, FP64_ONE } from "../constants.js";
@@ -11,11 +11,104 @@ import {
 } from "../services/trade-service.js";
 import { createJitterTransactionService } from "../services/transaction-service.js";
 import { makeTestMarketConfig } from "./fakes.js";
+import { getSuiGrpcClient } from "../rpc.js";
+import type { SyOutputSimulator } from "../services/sy-output-redemption.js";
 
 const senderAddress =
   "0x00000000000000000000000000000000000000000000000000000000000000aa";
 
+describe("Scallop automatic redemption capacity", () => {
+  const now = 10_000;
+  const fields = {
+    withdraw_window_ms: "1000", withdraw_window_start_ms: "9500",
+    withdraw_bps_per_window: "1000", withdraw_window_base_reserve: "1000",
+    withdraw_window_withdrawn: "0", withdraw_window_minted: "0",
+    market_coin_balance: { value: "1000" }, queued_market_coin: "0",
+  };
+  const cases: Array<[string, Record<string, unknown>, boolean]> = [
+    ["credits same-window minting against withdrawals", { withdraw_window_withdrawn: "120", withdraw_window_minted: "100" }, true],
+    ["does not add minted units to the configured quota", { withdraw_window_minted: "200", withdraw_window_base_reserve: "500" }, false],
+    ["saturates net withdrawals at zero", { withdraw_window_withdrawn: "10", withdraw_window_minted: "100" }, true],
+    ["reserves queued receipts before choosing an immediate exit", { queued_market_coin: "950" }, false],
+    ["accepts the exact unqueued-reserve boundary", { queued_market_coin: "920" }, true],
+    ["fails closed when queued receipts exceed balance", { queued_market_coin: "1001" }, false],
+    ["rolls over quota and clears previous minted and withdrawn counters", { withdraw_window_start_ms: "9000", withdraw_window_base_reserve: "0", withdraw_window_withdrawn: "1000", withdraw_window_minted: "1000" }, true],
+    ["rolls over a window starting at zero", { withdraw_window_start_ms: "0", withdraw_window_base_reserve: "0" }, true],
+    ["still reserves queued receipts after rollover", { withdraw_window_start_ms: "0", queued_market_coin: "950" }, false],
+    ["keeps full-width u128 withdrawal counters", { withdraw_window_withdrawn: "18446744073709551616100", withdraw_window_minted: "18446744073709551616080" }, true],
+    ["does not invent reserve from missing balance", { market_coin_balance: undefined }, false],
+    ["does not choose an exit with exhausted quota", { withdraw_window_withdrawn: "101" }, false],
+    ["rejects invalid breaker settings", { withdraw_bps_per_window: "10001" }, false],
+  ];
+  for (const [name, overrides, redeem] of cases) {
+    test(name, async () => {
+      const client = getSuiGrpcClient("testnet");
+      const getObject = spyOn(client, "getObject").mockImplementation(async (input) => {
+        expect(input.objectId).toBe(objectId("21"));
+        return { object: { json: { ...fields, ...overrides } } } as never;
+      });
+      const clock = spyOn(Date, "now").mockReturnValue(now);
+      try {
+        const config = getScallopTestConfig();
+        const service = createJitterTradeService({
+          marketId: "scallop", config, network: "testnet",
+          quoteService: createJitterQuoteService({ config, delegates: {
+            quoteSwapPtForSy: async () => ({ syOut: 80n, slippageBps: 0n }),
+          } }),
+        });
+        const quote = await service.quoteTrade({
+          marketId: "scallop", product: "pt", side: "sell", inputAsset: "pt",
+          amount: "80", slippageBps: 0, syIndex: FP64_ONE.toString(), owner: senderAddress,
+        });
+        expect(quote.status).toBe(redeem ? "available" : "unavailable");
+        expect(quote.expectedOutput).toEqual(redeem ? [{ asset: "marketCoin", amount: "80" }] : []);
+        expect(getObject).toHaveBeenCalledTimes(1);
+      } finally {
+        getObject.mockRestore();
+        clock.mockRestore();
+      }
+    });
+  }
+});
+
 describe("JitterTradeService", () => {
+  test.each(["buy_pt", "buy_yt", "add_lp_keep_yt", "add_lp_from_sy", "remove_lp"] as const)(
+    "%s consumes zero SY without creating an empty TransferObjects command", async actionId => {
+      const service = createTradeServiceForBuild("scallop", getScallopTestConfig(), async (tx, indexes) => {
+        expect(tx.getData().commands.some(c => c.$kind === "TransferObjects" && c.TransferObjects.objects.length === 0)).toBe(false);
+        return indexes.map(() => 0n);
+      });
+      const product = actionId.includes("lp") ? "lp" : actionId.includes("yt") ? "yt" : "pt";
+      const side = actionId.startsWith("buy") ? "buy" : actionId.startsWith("remove") ? "remove" : "add";
+      const result = await service.buildTradeTransaction({ ...baseRequest(product, side, side === "remove" ? "lp" : "sy", "1000", "scallop"),
+        actionId, inputCoinId: objectId("40"), positionId: objectId("41") });
+      expect(collectMoveCallsFromJson(result.transactionJson).map(c => c.function)).toContain("destroy_zero");
+    },
+  );
+  test.each(["buy_pt", "buy_yt", "sell_pt", "sell_yt", "add_lp", "add_lp_keep_yt", "add_lp_from_sy", "remove_lp", "remove_lp_to_sy"] as const)(
+    "%s probes and redeems returned SY while keeping minimum outputs", async (actionId) => {
+      let simulations = 0;
+      const simulator: SyOutputSimulator = async (_tx, indexes) => {
+        simulations++;
+        if (simulations === 1) expect(indexes).toHaveLength(1);
+        return indexes.map(() => 20n);
+      };
+      const product = actionId.includes("lp") ? "lp" : actionId.includes("yt") ? "yt" : "pt";
+      const side = actionId.startsWith("buy") ? "buy" : actionId.startsWith("sell") ? "sell" : actionId.startsWith("remove") ? "remove" : "add";
+      const inputAsset = side === "sell" ? product as "pt" | "yt" : side === "remove" ? "lp" : "sy";
+      const service = createTradeServiceForBuild("scallop", getScallopTestConfig(), simulator);
+      const request = { ...baseRequest(product, side, inputAsset, "1000", "scallop"),
+        actionId, inputCoinId: objectId("40"), positionId: objectId("41"), pairedPtAmount: "400" };
+      const quote = await service.quoteTrade(request);
+      const built = await service.buildTradeTransaction({ ...request, reviewedQuote: quote });
+      const calls = collectMoveCallsFromJson(built.transactionJson);
+      expect(simulations).toBe(2);
+      expect(calls.some(call => call.module === "scallop_market_vault" && call.function === "redeem")).toBe(true);
+      expect(calls.some(call => call.module === "redeem")).toBe(false);
+      expect(built.quote.minReceived).toEqual(quote.minReceived);
+      expect(built.quote.expectedOutput.every(output => output.asset !== "sy")).toBe(true);
+    },
+  );
   test("returns a frontend-stable product quote response", async () => {
     const config = makeTestMarketConfig();
     const service = createJitterTradeService({
@@ -279,7 +372,7 @@ describe("JitterTradeService", () => {
           inputCoinId: objectId("42"),
           positionId: objectId("43"),
         },
-        "buy_exact_yt",
+        "buy_yt",
       ],
       [
         {
@@ -367,7 +460,7 @@ describe("JitterTradeService", () => {
     });
     expect(collectMoveCallsFromJson(result.transactionJson)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ module: "router", function: "create_market_state_position" }),
+        expect.objectContaining({ module: "router", function: "create_position" }),
         expect.objectContaining({ module: "router", function: "buy_pt" }),
       ]),
     );
@@ -418,6 +511,7 @@ function baseRequest(
 function createTradeServiceForBuild(
   marketId: string,
   config: ReturnType<typeof getDemoConfig>,
+  simulateSyOutputs?: SyOutputSimulator,
 ) {
   return createJitterTradeService({
     marketId,
@@ -481,7 +575,8 @@ function createTradeServiceForBuild(
         }),
       },
     }),
-    transactionService: createJitterTransactionService({
+    simulateSyOutputs,
+    transactionService: simulateSyOutputs ? undefined : createJitterTransactionService({
       config,
       adapter: getJitterAdapterManifest(config),
       resolveSyIndex: async () => FP64_ONE,

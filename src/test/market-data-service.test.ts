@@ -1,3 +1,4 @@
+import { registryFixture, id as registryId } from "./registry-v2-fixtures.js";
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -18,6 +19,173 @@ const JAN_1_2025 = Date.UTC(2025, 0, 1);
 const JAN_1_2026 = Date.UTC(2026, 0, 1);
 
 describe("JitterMarketDataService", () => {
+  test("one explorer shares a Registry snapshot but a later read scans it afresh", async () => {
+    const f = registryFixture(2);
+    const config = makeTestMarketConfig({
+      marketRegistryObjectId: registryId(1),
+      marketObjectId: registryId(100),
+      syStateObjectId: registryId(4),
+    });
+    const chainReader = Object.assign(new InMemoryJitterChainReader({
+      pools: new Map([100, 101].map(id => [registryId(id), makeTestPoolFields()])),
+      pyStates: new Map([100, 101].map(id => [registryId(id), makeTestPyStateFields()])),
+    }), { getObjectInfo: f.reader.getObjectInfo, getDynamicFieldPage: f.reader.getDynamicFieldPage });
+    const service = createJitterMarketDataService({
+      network: "testnet",
+      chainReader,
+      configProvider: new InMemoryJitterMarketConfigProvider([
+        { id: "one", name: "One", network: "testnet", chainId: "test", config },
+        { id: "two", name: "Two", network: "testnet", chainId: "test", config: { ...config, marketRegistryObjectId: "0x01", marketObjectId: registryId(101) } },
+      ]),
+    });
+    expect((await service.getExplorerData()).markets).toHaveLength(2);
+    expect(f.queries.filter(query => query.parentId === registryId(10))).toHaveLength(1);
+    await service.getExplorerData();
+    expect(f.queries.filter(query => query.parentId === registryId(10))).toHaveLength(2);
+  });
+
+  test("receipt prices and index start before slow APY and are read concurrently", async () => {
+    const config = makeTestMarketConfig({
+      scallopMarketVaultObjectId: "0xvault",
+      scallopMarketObjectId: "0xupstream",
+    });
+    const started: string[] = [];
+    let releaseApy!: (value: number) => void;
+    let releasePrice!: (value: number) => void;
+    const apy = new Promise<number>((resolve) => { releaseApy = resolve; });
+    const price = new Promise<number>((resolve) => { releasePrice = resolve; });
+    const service = createJitterMarketDataService({
+      network: "testnet",
+      configProvider: new InMemoryJitterMarketConfigProvider([
+        { id: "live", name: "Live", network: "testnet", chainId: "test", config },
+      ]),
+      chainReader: new InMemoryJitterChainReader({
+        pools: new Map([[config.poolObjectId, makeTestPoolFields()]]),
+        pyStates: new Map([[config.pyStateObjectId, makeTestPyStateFields()]]),
+      }),
+      getUnderlyingApy: () => { started.push("apy"); return apy; },
+      getUnderlyingPriceUsd: () => { started.push("price"); return price; },
+      resolveSyIndex: () => { started.push("index"); return 1n << 64n; },
+    });
+    const pending = service.getExplorerData({ nowMs: JAN_1_2025 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const readsBeforeRelease = [...started];
+    releaseApy(0.05);
+    releasePrice(1);
+    const market = (await pending).markets[0];
+    expect(readsBeforeRelease).toEqual(expect.arrayContaining(["apy", "price", "index"]));
+    expect(market.underlyingApy).toBe(0.05);
+    expect(Number.isFinite(market.tvl)).toBe(true);
+  });
+
+  test("live reserve valuation overrides empty indexer balances and fails closed on price outages", async () => {
+    const config = makeTestMarketConfig({
+      marketDecimals: 6,
+      underlyingDecimals: 6,
+      scallopMarketVaultObjectId: "0xvault",
+      scallopMarketObjectId: "0xupstream",
+    });
+    const configProvider = new InMemoryJitterMarketConfigProvider([
+      { id: "live", name: "Live", network: "testnet", chainId: "test", config },
+    ]);
+    const chainReader = new InMemoryJitterChainReader({
+      pools: new Map([
+        [
+          config.poolObjectId,
+          makeTestPoolFields({
+            total_sy: "20000000",
+            total_pt: "80000000",
+            lp_supply: "30000000",
+            expiry: JAN_1_2026.toString(),
+          }),
+        ],
+      ]),
+      pyStates: new Map([
+        [
+          config.pyStateObjectId,
+          makeTestPyStateFields({
+            sy_balance: "80000000",
+            reserve_fee_balance: "1000000",
+            expiry: JAN_1_2026.toString(),
+          }),
+        ],
+      ]),
+    });
+    const options = {
+      network: "testnet" as const,
+      configProvider,
+      chainReader,
+      getUnderlyingApy: () => 0.05,
+      resolveSyIndex: () => 2n << 64n,
+      analyticsReader: {
+        getMarketAnalytics: async () => ({
+          source: "indexer",
+          updatedAtMs: String(JAN_1_2025),
+          tvl: { raw: "0", usd: null },
+          liquidity: { raw: "0", usd: null },
+          volume24h: { raw: "0", usd: null },
+          volume7d: { raw: "0", usd: null },
+          impliedApy: "0.99",
+          underlyingApy: null,
+          lpApy: null,
+        }),
+      } as unknown as JitterAnalyticsReader,
+    };
+    const service = createJitterMarketDataService({
+      ...options,
+      getUnderlyingPriceUsd: () => 0.5,
+    });
+    const market = (await service.getExplorerData({ nowMs: JAN_1_2025 }))
+      .markets[0];
+    expect(market.liquidity).toBe(60);
+    expect(market.tvl).toBe(101);
+    expect(market.syPrice).toBe(1);
+    expect(market.lpPrice).toBe(2);
+    expect(market.lpBreakdown.syWeight).toBeCloseTo(1 / 3);
+    expect(market.longYieldApy).toBeCloseTo(0.05);
+    expect(market.ytRoi).toBeCloseTo(0.05);
+    const missing = createJitterMarketDataService({
+      ...options,
+      getUnderlyingPriceUsd: () => null,
+    });
+    const unavailable = (await missing.getExplorerData()).markets[0];
+    for (const value of [unavailable.liquidity, unavailable.underlyingPrice, unavailable.ptUsdValue, unavailable.ytAssetPrice]) {
+      expect(Number.isNaN(value)).toBe(true);
+    }
+    const failed = createJitterMarketDataService({
+      ...options,
+      getUnderlyingPriceUsd: () => {
+        throw Error("outage");
+      },
+    });
+    expect(Number.isNaN((await failed.getExplorerData()).markets[0].tvl)).toBe(
+      true,
+    );
+  });
+  test("configured Registry failures cannot silently select static deployment data", async () => {
+    const config = makeTestMarketConfig({
+      marketRegistryObjectId: registryId(1),
+    });
+    const service = createJitterMarketDataService({
+      network: "testnet",
+      configProvider: new InMemoryJitterMarketConfigProvider([
+        {
+          id: "demo",
+          name: "Demo",
+          network: "testnet",
+          chainId: "test",
+          config,
+        },
+      ]),
+      chainReader: new InMemoryJitterChainReader({
+        pools: new Map([[config.poolObjectId, makeTestPoolFields()]]),
+        pyStates: new Map([[config.pyStateObjectId, makeTestPyStateFields()]]),
+      }),
+    });
+    await expect(service.getExplorerData()).rejects.toThrow(
+      "Registry V2 requires typed object reads",
+    );
+  });
   test("requires reward distributor config for product-level trade readiness", () => {
     const scallopConfig = makeTestMarketConfig({
       demoMarketVaultObjectId: "",
@@ -126,9 +294,9 @@ describe("JitterMarketDataService", () => {
       missingConfigKeys: [],
     });
     expect(
-      service.getMarketTradeMetadata("scallop-sui")?.actions.every(
-        (action) => action.disabledReason !== null,
-      ),
+      service
+        .getMarketTradeMetadata("scallop-sui")
+        ?.actions.every((action) => action.disabledReason !== null),
     ).toBe(true);
 
     expect(service.getMarketTradeMetadata("missing-reward")).toMatchObject({
@@ -234,6 +402,8 @@ describe("JitterMarketDataService", () => {
       chainReader,
       getUnderlyingApy: async (config) =>
         config.poolObjectId === "0xpool-trade" ? 0.04 : 0.01,
+      getUnderlyingPriceUsd: () => 1,
+      resolveSyIndex: () => 1n << 64n,
     });
 
     const data = await service.getExplorerData({ nowMs: JAN_1_2025 });
@@ -250,14 +420,43 @@ describe("JitterMarketDataService", () => {
     expect(data.markets[1]?.jitterConfig).toBeUndefined();
   });
 
-  test("overlays registry object ids before hydrating chain market data", async () => {
+  test("overlays V2 unified aliases before hydrating chain market data", async () => {
+    const f = registryFixture();
     const config = makeTestMarketConfig({
-      marketRegistryObjectId: "0xregistry",
-      marketObjectId: "0xmarket-stale",
+      marketRegistryObjectId: registryId(1),
+      marketObjectId: registryId(100),
+      syStateObjectId: registryId(4),
       poolObjectId: "0xpool-stale",
       pyStateObjectId: "0xpy-stale",
-      rewardDistributorObjectId: "0xreward-stale",
+      rewardDistributorObjectId: registryId(80),
     });
+    const chainReader = Object.assign(
+      new InMemoryJitterChainReader({
+        pools: new Map([
+          [
+            registryId(100),
+            makeTestPoolFields({
+              total_sy: "1000000",
+              total_pt: "1000000",
+              expiry: JAN_1_2026.toString(),
+            }),
+          ],
+        ]),
+        pyStates: new Map([
+          [
+            registryId(100),
+            makeTestPyStateFields({
+              market_id: registryId(100),
+              expiry: JAN_1_2026.toString(),
+            }),
+          ],
+        ]),
+      }),
+      {
+        getObjectInfo: f.reader.getObjectInfo,
+        getDynamicFieldPage: f.reader.getDynamicFieldPage,
+      },
+    );
     const service = createJitterMarketDataService({
       network: "testnet",
       configProvider: new InMemoryJitterMarketConfigProvider([
@@ -269,68 +468,17 @@ describe("JitterMarketDataService", () => {
           config,
         },
       ]),
-      chainReader: new InMemoryJitterChainReader({
-        objects: new Map([
-          [
-            "0xregistry",
-            {
-              market_ids: ["0xmarket-live"],
-            },
-          ],
-        ]),
-        dynamicFieldObjects: new Map([
-          [
-            "0xregistry",
-            [
-              {
-                value: {
-                  project_id: "1",
-                  market_id: "0xmarket-live",
-                  py_state_id: "0xpy-live",
-                  pool_id: "0xpool-live",
-                  pt_orderbook_id:
-                    "0x0000000000000000000000000000000000000000000000000000000000000000",
-                  yt_orderbook_id:
-                    "0x0000000000000000000000000000000000000000000000000000000000000000",
-                  reward_distributor_id: "0xreward-live",
-                  expiry: JAN_1_2026.toString(),
-                },
-              },
-            ],
-          ],
-        ]),
-        pools: new Map([
-          [
-            "0xpool-live",
-            makeTestPoolFields({
-              total_sy: "1000000",
-              total_pt: "1000000",
-              expiry: JAN_1_2026.toString(),
-            }),
-          ],
-        ]),
-        pyStates: new Map([
-          [
-            "0xpy-live",
-            makeTestPyStateFields({
-              market_id: "0xmarket-live",
-              expiry: JAN_1_2026.toString(),
-            }),
-          ],
-        ]),
-      }),
+      chainReader,
     });
-
     const data = await service.getExplorerData({ nowMs: JAN_1_2025 });
-
     expect(data.markets[0]).toMatchObject({
       marketId: "demo",
-      address: "0xpool-live",
+      address: registryId(100),
       jitterConfig: {
-        marketObjectId: "0xmarket-live",
-        pyStateObjectId: "0xpy-live",
-        poolObjectId: "0xpool-live",
-        rewardDistributorObjectId: "0xreward-live",
+        marketObjectId: registryId(100),
+        pyStateObjectId: registryId(100),
+        poolObjectId: registryId(100),
+        rewardDistributorObjectId: registryId(80),
       },
     });
   });
@@ -361,6 +509,9 @@ describe("JitterMarketDataService", () => {
           lpApyFormulaVersion: "weighted_pool_yield_v1",
           updatedAtMs: String(JAN_1_2025 - 120_000),
         };
+      },
+      async getMarketMetadata() {
+        throw new Error("not used");
       },
       async getMarketChart() {
         throw new Error("not used");
@@ -401,10 +552,7 @@ describe("JitterMarketDataService", () => {
           ],
         ]),
         pyStates: new Map([
-          [
-            "0xpy",
-            makeTestPyStateFields({ expiry: JAN_1_2026.toString() }),
-          ],
+          ["0xpy", makeTestPyStateFields({ expiry: JAN_1_2026.toString() })],
         ]),
       }),
       analyticsReader,
@@ -416,9 +564,9 @@ describe("JitterMarketDataService", () => {
     });
 
     expect(data.markets[0]).toMatchObject({
-      tvl: 4,
+      tvl: 3,
       liquidity: 3,
-      volume24h: 0.5,
+      volume24h: 0,
       fixedApy: 0.08,
       underlyingApy: 0.04,
       lpApy: 0.055,
@@ -490,8 +638,8 @@ describe("JitterMarketDataService", () => {
       address: "0xpool-scallop-sui",
       symbol: "sSUI",
       protocol: "Scallop",
-      liquidity: 5,
-      volume24h: 0.7,
+      liquidity: Number.NaN,
+      volume24h: Number.NaN,
       underlyingApy: 0.042,
       jitterConfig: undefined,
     });
@@ -531,10 +679,7 @@ describe("JitterMarketDataService", () => {
           ],
         ]),
         pyStates: new Map([
-          [
-            "0xpy",
-            makeTestPyStateFields({ expiry: JAN_1_2026.toString() }),
-          ],
+          ["0xpy", makeTestPyStateFields({ expiry: JAN_1_2026.toString() })],
         ]),
       }),
     });
@@ -547,7 +692,7 @@ describe("JitterMarketDataService", () => {
       name: "sSUI",
       protocol: "Scallop",
       marketsCount: 1,
-      liquidity: 2,
+      liquidity: Number.NaN,
     });
     expect(data.categoryFilters).toEqual(
       expect.arrayContaining([
@@ -601,12 +746,16 @@ describe("JitterMarketDataService", () => {
       chainReader: new InMemoryJitterChainReader(),
     });
 
-    await expect(service.getMarketAnalytics("market-a")).resolves.toMatchObject({
-      marketId: "market-a",
-      source: "indexer",
-      volume24h: { raw: "10" },
-    });
-    await expect(unavailableService.getMarketAnalytics("market-a")).resolves.toMatchObject({
+    await expect(service.getMarketAnalytics("market-a")).resolves.toMatchObject(
+      {
+        marketId: "market-a",
+        source: "indexer",
+        volume24h: { raw: "10" },
+      },
+    );
+    await expect(
+      unavailableService.getMarketAnalytics("market-a"),
+    ).resolves.toMatchObject({
       marketId: "market-a",
       source: "unavailable",
       volume24h: { raw: "0" },
@@ -672,7 +821,10 @@ describe("JitterMarketDataService", () => {
         };
       },
     };
-    const failingAnalyticsReader: Pick<JitterAnalyticsReader, "getMarketAnalytics"> = {
+    const failingAnalyticsReader: Pick<
+      JitterAnalyticsReader,
+      "getMarketAnalytics"
+    > = {
       async getMarketAnalytics() {
         throw new Error("indexer unavailable");
       },
@@ -696,21 +848,23 @@ describe("JitterMarketDataService", () => {
     const data = await service.getExplorerData({ nowMs: JAN_1_2025 });
     const market = data.markets[0];
     expect(market).toMatchObject({
-      tvl: 5.5,
+      tvl: 2,
       liquidity: 9.25,
-      volume24h: 1.1,
-      volume7d: 7.7,
+      volume24h: 0,
+      volume7d: 0,
       fixedApy: 0.08,
       underlyingApy: 0.05,
       longYieldApy: 0,
-      underlyingPrice: 2.202380952380952,
-      ptUsdValue: 2.0392416225749552,
-      ytAssetPrice: 0.16313932980599688,
-      ytLeverage: 13.499999999999964,
+      underlyingPrice: 1,
+      ptUsdValue: 1 / 1.08,
+      ytAssetPrice: 1 - 1 / 1.08,
+      ytLeverage: 1 / (1 - 1 / 1.08),
       lpApy: 0.065,
     });
 
-    await expect(fallbackService.getExplorerData({ nowMs: JAN_1_2025 })).resolves.toMatchObject({
+    await expect(
+      fallbackService.getExplorerData({ nowMs: JAN_1_2025 }),
+    ).resolves.toMatchObject({
       markets: [
         {
           tvl: 2,

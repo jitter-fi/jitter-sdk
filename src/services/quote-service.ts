@@ -25,6 +25,8 @@ import {
   type QuoteSwapYtForSy,
 } from "../simulation.js";
 import { getScallopMarketIndex } from "../queries.js";
+import { getHaedalStakeQuote } from "../adapters/haedal.js";
+import { getEmberDepositQuote } from "../adapters/ember.js";
 import type { ProfitScenarioInput, ProfitScenarioResult } from "../domain/profit-scenario.js";
 import { calculateProfitScenario } from "../domain/profit-scenario.js";
 import type { JitterMarketConfig } from "../types.js";
@@ -153,6 +155,7 @@ export type PreviewAddLpKeepYtResult = PreviewBase<
     lpOut: bigint;
     pairedPt: bigint;
     keptYt: bigint;
+    treasurySy: bigint;
     syToMintHint: bigint;
     syForLiquidity: bigint;
     minLpOutHint: bigint;
@@ -171,6 +174,7 @@ export type PreviewAddLpFromSyResult = PreviewBase<
     firstLegLpOut: bigint;
     secondLegLpOut: bigint;
     syOut: bigint;
+    treasurySy: bigint;
     syRedeemOut: bigint;
     syRepaid: bigint;
     minLpOutHint: bigint;
@@ -395,12 +399,13 @@ export function createJitterQuoteService(
           lpOut: quote.lpOut,
           pairedPt: quote.pairedPt,
           keptYt: quote.keptYt,
+          treasurySy: quote.treasurySy ?? 0n,
           syToMintHint: quote.syToMint,
           syForLiquidity: quote.syForLiquidity,
           minLpOutHint: quote.lpOut,
         },
-        positionDelta: { pt: 0n, yt: quote.keptYt, lp: quote.lpOut },
-        walletDelta: { sy: -params.syIn },
+        positionDelta: { pt: quote.ptDust ?? 0n, yt: quote.keptYt, lp: quote.lpOut },
+        walletDelta: { sy: (quote.syOut ?? 0n) - params.syIn },
         slippageBps: 0n,
         source: quoteSource(options, "quoteAddLiquidityKeepYt"),
       });
@@ -424,12 +429,13 @@ export function createJitterQuoteService(
           firstLegLpOut: quote.firstLegLpOut,
           secondLegLpOut: quote.secondLegLpOut,
           syOut: quote.syOut,
+          treasurySy: quote.treasurySy ?? 0n,
           syRedeemOut: quote.syRedeemOut,
           syRepaid: quote.syRepaid,
-          minLpOutHint: quote.firstLegLpOut,
+          minLpOutHint: quote.lpOut,
           minSyOutHint: 0n,
         },
-        positionDelta: { pt: 0n, yt: 0n, lp: quote.lpOut },
+        positionDelta: { pt: quote.ptDust ?? 0n, yt: 0n, lp: quote.lpOut },
         walletDelta: { sy: quote.syOut - params.syIn },
         slippageBps: quote.slippageBps,
         source: quoteSource(options, "quoteAddLiquidityFromSy"),
@@ -496,6 +502,11 @@ export function createJitterQuoteService(
       underlyingIn: bigint,
       syIndex?: bigint,
     ): Promise<QuoteUnderlyingToSy> {
+      if (options.config.haedalAdapterPackageId || options.config.emberAdapterPackageId) {
+        const quote = await (options.config.emberAdapterPackageId ? getEmberDepositQuote : getHaedalStakeQuote)(requireNetwork(options), options.config, underlyingIn);
+        const value = syToUnderlyingAmount(quote.receiptOut, quote.syIndex);
+        return { syIn: underlyingToSyAmount(value, quote.syIndex), syIndex: quote.syIndex };
+      }
       const resolvedSyIndex = await resolveSyIndex(options, syIndex);
       return {
         syIn: underlyingToSyAmount(underlyingIn, resolvedSyIndex),
@@ -590,6 +601,10 @@ async function resolveSyIndex(
   if (override !== undefined) return override;
   if (options.delegates?.resolveSyIndex) {
     return options.delegates.resolveSyIndex();
+  }
+  if (options.config.emberAdapterPackageId) return (await getEmberDepositQuote(requireNetwork(options),options.config,0n)).syIndex;
+  if (options.config.haedalAdapterPackageId) {
+    return (await getHaedalStakeQuote(requireNetwork(options), options.config, 0n)).syIndex;
   }
   if (options.config.adapterKind === "current" || options.config.currentAdapterPackageId) {
     throw new Error("Current previews require an explicit accrued syIndex or resolveSyIndex delegate; stored indices are not fresh quotes.");

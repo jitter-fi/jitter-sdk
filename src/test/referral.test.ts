@@ -10,6 +10,7 @@ import {
   type JitterReferralObjects,
 } from "../referral.js";
 import { InMemoryJitterEventReader } from "./fakes.js";
+import type { EventReaderQuery, JitterEventReader } from "../ports/event-reader.js";
 
 function objectId(byte: string): string {
   return `0x${byte.repeat(64)}`;
@@ -97,6 +98,28 @@ describe("referral builder", () => {
     expect(records).toEqual({ [objectId("e")]: activeRecordId });
   });
 
+  test("keeps referral event queries within the Sui page-size limit", async () => {
+    const queries: EventReaderQuery[] = [];
+    const reader: JitterEventReader = {
+      async queryEvents<TEvent>(query: EventReaderQuery): Promise<TEvent[]> {
+        queries.push(query);
+        return [];
+      },
+    };
+
+    await resolveYtReferralRecordObjectIds({
+      eventReader: reader,
+      network: "testnet",
+      referralPackageId: objectId("4"),
+      owner: objectId("5"),
+      positionId: objectId("6"),
+      pointPrograms: [],
+    });
+
+    expect(queries).toHaveLength(2);
+    expect(queries.every((query) => query.limit === 50)).toBe(true);
+  });
+
   test("resolves YT records by PointConfig source without mixing LP records", async () => {
     const packageId = objectId("a");
     const pointConfigId = objectId("b");
@@ -145,5 +168,84 @@ describe("referral builder", () => {
     });
 
     expect(records).toEqual({ [pointConfigId]: ytRecordId });
+  });
+
+  test("uses referral markers as the authoritative record discovery source", async () => {
+    const packageId = objectId("a");
+    const extensionsPackageId = objectId("b");
+    const pointConfigId = objectId("c");
+    const positionId = objectId("d");
+    const recordId = objectId("e");
+    const queries: EventReaderQuery[] = [];
+    const records = await resolveYtReferralRecordObjectIds({
+      eventReader: {
+        async queryEvents<TEvent>(query: EventReaderQuery): Promise<TEvent[]> {
+          queries.push(query);
+          return [];
+        },
+      },
+      network: "testnet",
+      referralPackageId: packageId,
+      extensionsPackageId,
+      owner: objectId("f"),
+      positionId,
+      pointPrograms: [{
+        label: "Jitter Points",
+        protocol: "jitter",
+        projectObjectId: objectId("1"),
+        scoreboardObjectId: objectId("2"),
+        pointConfigObjectId: pointConfigId,
+        scopes: ["yt"],
+        referral: {
+          policyStateObjectId: objectId("3"),
+          referralTableObjectId: objectId("4"),
+        },
+      }],
+      markerReader: async (input) => {
+        expect(input).toEqual({
+          parentId: pointConfigId,
+          keyType: `${extensionsPackageId}::liquidlink_points::YtReferralRecordKey`,
+          positionId,
+        });
+        return recordId;
+      },
+    });
+
+    expect(records).toEqual({ [pointConfigId]: recordId });
+    expect(queries).toHaveLength(0);
+  });
+
+  test("treats a missing referral marker as an uninitialized reward record", async () => {
+    const queries: EventReaderQuery[] = [];
+    const pointConfigId = objectId("6");
+    const records = await resolveYtReferralRecordObjectIds({
+      eventReader: {
+        async queryEvents<TEvent>(query: EventReaderQuery): Promise<TEvent[]> {
+          queries.push(query);
+          return [];
+        },
+      },
+      network: "testnet",
+      referralPackageId: objectId("7"),
+      extensionsPackageId: objectId("8"),
+      owner: objectId("9"),
+      positionId: objectId("a"),
+      pointPrograms: [{
+        label: "Jitter Points",
+        protocol: "jitter",
+        projectObjectId: objectId("b"),
+        scoreboardObjectId: objectId("c"),
+        pointConfigObjectId: pointConfigId,
+        scopes: ["yt"],
+        referral: {
+          policyStateObjectId: objectId("d"),
+          referralTableObjectId: objectId("e"),
+        },
+      }],
+      markerReader: async () => null,
+    });
+
+    expect(records).toEqual({});
+    expect(queries).toHaveLength(0);
   });
 });

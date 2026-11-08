@@ -3,13 +3,15 @@ import {
   getPoolVolumeStats as queryPoolVolumeStats,
   getPyState as queryPyState,
 } from "../queries.js";
-import { grpcRequest, type GrpcNetworkKind } from "../rpc.js";
+import { getSuiGrpcClient, grpcRequest, type GrpcNetworkKind } from "../rpc.js";
 import type {
   CoinBalanceQuery,
   DynamicFieldObjectQuery,
   JitterChainReader,
   OwnedObjectQuery,
   PoolVolumeStatsSnapshot,
+  ChainObjectInfo,
+  DynamicFieldPage,
 } from "../ports/chain-reader.js";
 import type {
   JitterMarketConfig,
@@ -18,6 +20,14 @@ import type {
 } from "../types.js";
 
 export type SuiJitterChainReaderDelegates = {
+  getObjectInfo?: <T>(
+    network: GrpcNetworkKind,
+    objectId: string,
+  ) => Promise<ChainObjectInfo<T>>;
+  getDynamicFieldPage?: <T>(
+    network: GrpcNetworkKind,
+    query: DynamicFieldObjectQuery,
+  ) => Promise<DynamicFieldPage<T>>;
   getObject?: <TFields>(
     network: GrpcNetworkKind,
     objectId: string,
@@ -53,6 +63,21 @@ export class SuiJitterChainReader implements JitterChainReader {
     private readonly network: GrpcNetworkKind,
     private readonly delegates: SuiJitterChainReaderDelegates = {},
   ) {}
+
+  getObjectInfo<T>(objectId: string): Promise<ChainObjectInfo<T>> {
+    return (this.delegates.getObjectInfo ?? defaultGetObjectInfo)<T>(
+      this.network,
+      objectId,
+    );
+  }
+
+  getDynamicFieldPage<T>(
+    query: DynamicFieldObjectQuery,
+  ): Promise<DynamicFieldPage<T>> {
+    return (
+      this.delegates.getDynamicFieldPage ?? defaultGetDynamicFieldPage
+    )<T>(this.network, query);
+  }
 
   getObject<TFields>(objectId: string): Promise<TFields> {
     const getObject = this.delegates.getObject ?? defaultGetObject;
@@ -98,13 +123,91 @@ export class SuiJitterChainReader implements JitterChainReader {
   }
 }
 
+async function defaultGetObjectInfo<T>(
+  network: GrpcNetworkKind,
+  objectId: string,
+): Promise<ChainObjectInfo<T>> {
+  const { object } = await getSuiGrpcClient(network).getObject({
+    objectId,
+    include: { json: true },
+  });
+  return typedObjectInfo<T>(object);
+}
+
+function typedObjectInfo<T>(object: {
+  objectId: string;
+  type: string;
+  version: string;
+  owner: unknown;
+  json: unknown;
+}): ChainObjectInfo<T> {
+  if (!object.type || !object.json || object.version == null)
+    throw new Error(`Missing typed object data: ${object.objectId}.`);
+  return {
+    objectId: object.objectId,
+    type: object.type,
+    version: object.version,
+    owner: object.owner,
+    fields: object.json as T,
+  };
+}
+
+async function defaultGetDynamicFieldPage<T>(
+  network: GrpcNetworkKind,
+  query: DynamicFieldObjectQuery,
+): Promise<DynamicFieldPage<T>> {
+  const limit = query.limit ?? 50;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50)
+    throw new Error("Dynamic field page size must be 1-50.");
+  const client = getSuiGrpcClient(network);
+  const page = await client.listDynamicFields({
+    parentId: query.parentId,
+    cursor: query.cursor,
+    limit,
+  });
+  if (page.dynamicFields.length > limit)
+    throw new Error("Dynamic field provider exceeded requested page size.");
+  const requested = page.dynamicFields.map((field) => field.fieldId);
+  if (new Set(requested).size !== requested.length)
+    throw new Error("Duplicate dynamic field ID in page.");
+  if (!requested.length)
+    return {
+      data: [],
+      hasNextPage: page.hasNextPage,
+      nextCursor: page.cursor ?? null,
+    };
+  const batch = await client.getObjects({
+    objectIds: requested,
+    include: { json: true },
+  });
+  if (batch.objects.length !== requested.length)
+    throw new Error("Incomplete dynamic field object batch.");
+  const byId = new Map<string, ChainObjectInfo<T>>();
+  for (const item of batch.objects) {
+    if (item instanceof Error) throw item;
+    if (!requested.includes(item.objectId) || byId.has(item.objectId))
+      throw new Error("Unexpected or duplicate object in dynamic field batch.");
+    byId.set(item.objectId, typedObjectInfo<T>(item));
+  }
+  const data = requested.map((objectId) => {
+    const item = byId.get(objectId);
+    if (!item) throw new Error("Missing dynamic field object.");
+    return item;
+  });
+  return {
+    data,
+    hasNextPage: page.hasNextPage,
+    nextCursor: page.cursor ?? null,
+  };
+}
+
 async function defaultGetObject<TFields>(
   network: GrpcNetworkKind,
   objectId: string,
 ): Promise<TFields> {
   const response = await grpcRequest<{
     data: { content: { fields: TFields } };
-  }>(network, "sui_getObject", [objectId, { showContent: true }]);
+  }>(network, "getObject", [objectId, { showContent: true }]);
   return response.data.content.fields;
 }
 
@@ -112,19 +215,27 @@ async function defaultGetOwnedObjects<TFields>(
   network: GrpcNetworkKind,
   query: OwnedObjectQuery,
 ): Promise<TFields[]> {
-  const response = await grpcRequest<{
-    data: Array<{ data: { content: { fields: TFields } } }>;
-  }>(network, "suix_getOwnedObjects", [
-    query.owner,
-    {
-      filter: { StructType: query.structType },
-      options: { showContent: true },
-    },
-    query.cursor ?? null,
-    query.limit ?? 50,
-  ]);
-
-  return response.data.map((item) => item.data.content.fields);
+  const rows = new Map<string, TFields>();
+  const cursors = new Set<string>();
+  let cursor = query.cursor ?? null;
+  if (cursor) cursors.add(cursor);
+  do {
+    const response = await grpcRequest<{
+      data: Array<{ data: { objectId: string; content: { fields: TFields } } }>;
+      hasNextPage: boolean;
+      nextCursor?: string | null;
+    }>(network, "listOwnedObjects", [query.owner, {
+      filter: { StructType: query.structType }, options: { showContent: true },
+    }, cursor, query.limit ?? 50]);
+    for (const item of response.data) rows.set(item.data.objectId, item.data.content.fields);
+    if (!response.hasNextPage) break;
+    if (!response.nextCursor || cursors.has(response.nextCursor)) {
+      throw new Error("Incomplete owned object pagination.");
+    }
+    cursor = response.nextCursor;
+    cursors.add(cursor);
+  } while (true);
+  return [...rows.values()];
 }
 
 async function defaultGetCoinBalance(
@@ -137,7 +248,7 @@ async function defaultGetCoinBalance(
       coinBalance?: string;
       addressBalance?: string;
     };
-  }>(network, "suix_getBalance", [query.owner, query.coinTypeTag]);
+  }>(network, "getBalance", [query.owner, query.coinTypeTag]);
   const raw =
     response.balance?.balance ??
     response.balance?.coinBalance ??
@@ -159,14 +270,10 @@ async function defaultGetDynamicFieldObjects<TFields>(
       data: Array<{ objectId: string }>;
       nextCursor?: string | null;
       hasNextPage?: boolean;
-    }>(network, "suix_getDynamicFields", [
-      query.parentId,
-      cursor,
-      limit,
-    ]);
+    }>(network, "listDynamicFields", [query.parentId, cursor, limit]);
 
     objectIds.push(...response.data.map((field) => field.objectId));
-    cursor = response.hasNextPage ? response.nextCursor ?? null : null;
+    cursor = response.hasNextPage ? (response.nextCursor ?? null) : null;
   } while (cursor);
 
   return Promise.all(

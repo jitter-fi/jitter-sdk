@@ -1,4 +1,28 @@
 /** Facade, service, infrastructure, and port exports. */
+export { gasBudgetWithHeadroom, buildWithGasHeadroom } from "../services/transaction-gas.js";
+export { createFullLiquidityService, FullLiquidityPreparationError } from "../services/full-liquidity-service.js";
+export type {
+  CreateFullLiquidityServiceOptions, FullLiquidityPrepareRequest, FullLiquiditySimulation,
+  FullLiquidityQuote, FullLiquidityFailureKind, FullLiquidityInputPolicy,
+} from "../services/full-liquidity-service.js";
+
+export { readJitterRewardLeaderboard, readJitterRewardSummary } from "../services/reward-read-service.js";
+export type {
+  ReadJitterRewardLeaderboardInput,
+  ReadJitterRewardSummaryInput,
+  JitterRewardLeaderboardResult,
+  JitterRewardSummaryResult,
+  JitterRewardReadDependencies,
+} from "../services/reward-read-service.js";
+
+export { createJitterPointService } from "../services/point-service.js";
+export type {
+  CreateJitterPointServiceOptions,
+  JitterPointService,
+  JitterPointSnapshot,
+  ClosedPointArchiveTarget,
+  PrepareClosedPointsParams,
+} from "../services/point-service.js";
 
 export {
   buildJitterMarketCategoryFilters,
@@ -9,6 +33,11 @@ export {
 } from "../services/market-data-service.js";
 export { SuiJitterChainReader } from "../infrastructure/sui-chain-reader.js";
 export type { SuiJitterChainReaderDelegates } from "../infrastructure/sui-chain-reader.js";
+export {
+  normalizeSuiGrpcPageSize,
+  SUI_GRPC_MAX_PAGE_SIZE,
+  withSafeSuiGrpcPagination,
+} from "../infrastructure/sui-grpc-pagination.js";
 export { SuiJitterEventReader } from "../infrastructure/sui-event-reader.js";
 export { HttpJitterAnalyticsReader } from "../infrastructure/http-analytics-reader.js";
 export type { HttpJitterAnalyticsReaderOptions } from "../infrastructure/http-analytics-reader.js";
@@ -23,6 +52,8 @@ export type {
 export type { JitterMarketConfigProvider } from "../ports/config-provider.js";
 export type {
   DynamicFieldObjectQuery,
+  ChainObjectInfo,
+  DynamicFieldPage,
   JitterChainReader,
   OwnedObjectQuery,
   PoolVolumeStatsSnapshot,
@@ -88,6 +119,7 @@ export {
 export type {
   JitterReferralObjects,
   LpReferralRecordEvent,
+  ReferralMarkerReader,
   ReferralRecordEvent,
   YtReferralRecordEvent,
 } from "../referral.js";
@@ -147,8 +179,10 @@ export type {
   JitterTradeService,
 } from "../services/trade-service.js";
 export { createJitterTransactionService } from "../services/transaction-service.js";
+export type { SyOutputSimulator } from "../services/sy-output-redemption.js";
 export type {
   BuildBuyPtRouteTxParams,
+  BuildBindReferralTxParams,
   BuildBuyPtTxParams,
   BuildBuyYtTxParams,
   BuildAddLpFromSyFromUnderlyingTxParams,
@@ -168,6 +202,7 @@ export type {
   CancelQueuedRedeemSyTxParams,
   ClaimYtInterestTxParams,
   CreateJitterTransactionServiceOptions,
+  SyOutputTransform,
   DepositToSyTxParams,
   EmptyRewardSettlementStrategy,
   JitterTransactionService,
@@ -194,3 +229,4 @@ export type {
   JitterTradeSide,
   MarketDataServiceOptions,
 } from "../services/market-data-service.js";
+export * from "../services/wallet-point-settlement.js";

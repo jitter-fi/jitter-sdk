@@ -170,12 +170,15 @@ export function addEmberDeposit(
   config: JitterMarketConfig,
   mintRequest: TransactionObjectArgument,
   receiptCoin: TransactionObjectArgument,
+  maxReceiptIn: bigint,
 ): TransactionObjectArgument {
-  return tx.moveCall({
+  assertReceiptBudget(maxReceiptIn);
+  const budget = splitReceiptBudget(tx, receiptCoin, requireConfigValue(config.emberReceiptTypeTag, "emberReceiptTypeTag"), maxReceiptIn);
+  const change = tx.moveCall({
     target: `${requireConfigValue(config.emberAdapterPackageId, "emberAdapterPackageId")}::ember_market_vault::deposit`,
     arguments: [
       mintRequest,
-      receiptCoin,
+      budget,
       tx.object(config.syStateObjectId),
       tx.object(requireGlobalConfig(config)),
       tx.object(requireConfigValue(config.emberMarketVaultObjectId, "emberMarketVaultObjectId")),
@@ -191,6 +194,43 @@ export function addEmberDeposit(
       config.ytTypeTag,
     ],
   }) as TransactionObjectArgument;
+  tx.mergeCoins(receiptCoin, [change]);
+  return receiptCoin;
+}
+
+function assertReceiptBudget(maxReceiptIn: bigint): void {
+  if (typeof maxReceiptIn !== "bigint" || maxReceiptIn <= 0n || maxReceiptIn > (1n << 64n) - 1n) {
+    throw new Error("maxReceiptIn must be a positive raw u64 bigint.");
+  }
+}
+
+// Coin type uses Haedal's original package, not its latest implementation or adapter ID.
+const HAEDAL_RECEIPT_TYPE = "0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d::hasui::HASUI";
+
+function splitReceiptBudget(tx: Transaction, coin: TransactionObjectArgument, type: string, maximum: bigint): TransactionObjectArgument {
+  const balance = tx.moveCall({ target: "0x2::coin::value", arguments: [coin], typeArguments: [type] });
+  const capped = tx.moveCall({ target: "0x1::u64::min", arguments: [balance, tx.pure.u64(maximum)] });
+  return tx.splitCoins(coin, [capped])[0];
+}
+
+export type HaedalDepositConfig = JitterMarketConfig & {
+  haedalAdapterPackageId: string; haedalMarketVaultObjectId: string; haedalStakingObjectId: string;
+};
+
+/** Escrow at most maxReceiptIn haSUI shares; return the entire unspent input Coin. */
+export function addHaedalDeposit(tx: Transaction, config: HaedalDepositConfig,
+  mintRequest: TransactionObjectArgument, receiptCoin: TransactionObjectArgument, maxReceiptIn: bigint): TransactionObjectArgument {
+  assertReceiptBudget(maxReceiptIn);
+  const budget = splitReceiptBudget(tx, receiptCoin, HAEDAL_RECEIPT_TYPE, maxReceiptIn);
+  const change = tx.moveCall({
+    target: `${requireConfigValue(config.haedalAdapterPackageId, "haedalAdapterPackageId")}::haedal_market_vault::deposit`,
+    arguments: [mintRequest, budget, tx.object(config.syStateObjectId), tx.object(requireGlobalConfig(config)),
+      tx.object(requireConfigValue(config.haedalMarketVaultObjectId, "haedalMarketVaultObjectId")), tx.object(config.marketObjectId),
+      tx.object(requireConfigValue(config.haedalStakingObjectId, "haedalStakingObjectId")), tx.object.clock()],
+    typeArguments: [config.syTypeTag, config.ptTypeTag, config.ytTypeTag],
+  });
+  tx.mergeCoins(receiptCoin, [change]);
+  return receiptCoin;
 }
 
 /**
@@ -232,15 +272,24 @@ export function addEmberDepositFromUnderlying(
   config: JitterMarketConfig,
   mintRequest: TransactionObjectArgument,
   underlyingCoin: TransactionObjectArgument,
-  minReceiptShares: bigint | number = 1n,
-): TransactionObjectArgument {
+  budgets: { maxUnderlyingIn: bigint; maxReceiptIn: bigint; minReceiptShares: bigint },
+): { receiptChange: TransactionObjectArgument; underlyingChange: TransactionObjectArgument } {
+  if (!budgets || typeof budgets !== "object") throw new Error("Explicit underlying and receipt deposit budgets are required.");
+  assertReceiptBudget(budgets.maxReceiptIn);
+  if (typeof budgets.maxUnderlyingIn !== "bigint" || budgets.maxUnderlyingIn <= 0n || budgets.maxUnderlyingIn > (1n << 64n) - 1n) {
+    throw new Error("maxUnderlyingIn must be a positive raw u64 bigint.");
+  }
+  if (typeof budgets.minReceiptShares !== "bigint" || budgets.minReceiptShares < 0n || budgets.minReceiptShares > (1n << 64n) - 1n) {
+    throw new Error("minReceiptShares must be an explicit raw u64 bigint.");
+  }
+  const boundedUnderlying = splitReceiptBudget(tx, underlyingCoin, config.underlyingTypeTag, budgets.maxUnderlyingIn);
   const receiptCoin = addEmberMintReceiptFromUnderlying(
     tx,
     config,
-    underlyingCoin,
-    minReceiptShares,
+    boundedUnderlying,
+    budgets.minReceiptShares,
   );
-  return addEmberDeposit(tx, config, mintRequest, receiptCoin);
+  return { receiptChange: addEmberDeposit(tx, config, mintRequest, receiptCoin, budgets.maxReceiptIn), underlyingChange: underlyingCoin };
 }
 
 /**
@@ -265,7 +314,7 @@ export function addSuilendDeposit(
       tx.object(requireGlobalConfig(config)),
       tx.object(requireConfigValue(config.suilendMarketVaultObjectId, "suilendMarketVaultObjectId")),
       tx.object(config.marketObjectId),
-      tx.object(requireConfigValue(config.suilendReserveObjectId, "suilendReserveObjectId")),
+      tx.object(requireConfigValue(config.suilendLendingMarketObjectId, "suilendLendingMarketObjectId")),
       tx.object.clock(),
     ],
     typeArguments: [
@@ -368,28 +417,23 @@ export function addDemoRedeem(
 }
 
 /**
- * Satisfy a BurnSyRequest by redeeming Scallop MarketCoin<Underlying>.
- *
- * marketCoinIn should match the SY amount that was burned, because this adapter
- * models SY as Scallop sCoin shares.
+ * Burn SY and release exact Scallop receipt shares, without querying upstream.
  */
 export function addScallopRedeem(
   tx: Transaction,
   config: JitterMarketConfig,
-  burnRequest: TransactionObjectArgument,
-  marketCoinIn: bigint | number,
+  syCoin: TransactionObjectArgument,
+  minMarketCoinOut: bigint | number,
 ): TransactionObjectArgument {
   return tx.moveCall({
     target: `${requireConfigValue(config.scallopAdapterPackageId, "scallopAdapterPackageId")}::scallop_market_vault::redeem`,
     arguments: [
-      burnRequest,
-      tx.pure.u64(marketCoinIn),
+      syCoin,
+      tx.pure.u64(minMarketCoinOut),
       tx.object(config.syStateObjectId),
       tx.object(requireGlobalConfig(config)),
       tx.object(requireConfigValue(config.scallopMarketVaultObjectId, "scallopMarketVaultObjectId")),
       tx.object(config.marketObjectId),
-      tx.object(requireConfigValue(config.scallopVersionObjectId, "scallopVersionObjectId")),
-      tx.object(requireConfigValue(config.scallopMarketObjectId, "scallopMarketObjectId")),
       tx.object.clock(),
     ],
     typeArguments: [
@@ -422,16 +466,16 @@ export function addScallopRedeemMarketCoinToUnderlying(
 }
 
 /**
- * Satisfy a BurnSyRequest and return base Coin<Underlying> by routing the
- * adapter's MarketCoin<Underlying> output through Scallop redeem.
+ * Burn SY and redeem its receipt shares to underlying. Unlike the receipt-only
+ * leg, this downstream conversion still depends on Scallop availability.
  */
 export function addScallopRedeemToUnderlying(
   tx: Transaction,
   config: JitterMarketConfig,
-  burnRequest: TransactionObjectArgument,
-  marketCoinIn: bigint | number,
+  syCoin: TransactionObjectArgument,
+  minMarketCoinOut: bigint | number,
 ): TransactionObjectArgument {
-  const marketCoin = addScallopRedeem(tx, config, burnRequest, marketCoinIn);
+  const marketCoin = addScallopRedeem(tx, config, syCoin, minMarketCoinOut);
   return addScallopRedeemMarketCoinToUnderlying(tx, config, marketCoin);
 }
 
@@ -443,6 +487,36 @@ export function addScallopRedeemToUnderlying(
  * not create an Ember withdrawal request; base-asset withdrawal from Ember is
  * an external routing step.
  */
+/** Receipt-only exit: no PriceInfo, upstream refresh, or BurnSyRequest. */
+export function addReceiptRedeem(
+  tx: Transaction,
+  config: JitterMarketConfig,
+  syCoin: TransactionObjectArgument,
+  adapter: {
+    kind: "ember" | "suilend" | "spring" | "haedal";
+    packageId: string;
+    vaultObjectId: string;
+    typeArguments: string[];
+  },
+): TransactionObjectArgument {
+  const typeCount = { ember: 5, suilend: 5, spring: 4, haedal: 3 }[adapter.kind];
+  if (adapter.typeArguments.length !== typeCount) {
+    throw new Error(`Receipt exit for ${adapter.kind} requires ${typeCount} type arguments.`);
+  }
+  return tx.moveCall({
+    target: `${adapter.packageId}::${adapter.kind}_market_vault::redeem_receipt`,
+    typeArguments: adapter.typeArguments,
+    arguments: [
+      syCoin,
+      tx.object(config.syStateObjectId),
+      tx.object(requireGlobalConfig(config)),
+      tx.object(adapter.vaultObjectId),
+      tx.object(config.marketObjectId),
+      tx.object.clock(),
+    ],
+  });
+}
+
 export function addEmberRedeem(
   tx: Transaction,
   config: JitterMarketConfig,
@@ -535,7 +609,7 @@ export function addSuilendRedeem(
       tx.object(requireGlobalConfig(config)),
       tx.object(requireConfigValue(config.suilendMarketVaultObjectId, "suilendMarketVaultObjectId")),
       tx.object(config.marketObjectId),
-      tx.object(requireConfigValue(config.suilendReserveObjectId, "suilendReserveObjectId")),
+      tx.object(requireConfigValue(config.suilendLendingMarketObjectId, "suilendLendingMarketObjectId")),
       tx.object.clock(),
     ],
     typeArguments: [
@@ -550,7 +624,9 @@ export function addSuilendRedeem(
 
 /**
  * Satisfy a BurnSyRequest by withdrawing underlying from NAVI through the
- * adapter-owned NAVI AccountCap. Use this for non-SUI NAVI markets.
+ * adapter-owned NAVI AccountCap. Supports both SUI and non-SUI markets.
+ * Append addNaviOracleRefresh first; update the authenticated Pyth feed before
+ * that when stale. This low-level builder does not fetch off-chain price data.
  */
 export function addNaviRedeem(
   tx: Transaction,
@@ -570,6 +646,7 @@ export function addNaviRedeem(
       tx.object(requireConfigValue(config.naviOracleObjectId, "naviOracleObjectId")),
       tx.object(requireConfigValue(config.naviIncentiveV2ObjectId, "naviIncentiveV2ObjectId")),
       tx.object(requireConfigValue(config.naviIncentiveV3ObjectId, "naviIncentiveV3ObjectId")),
+      tx.object(config.naviSuiSystemStateObjectId ?? "0x5"),
       tx.object.clock(),
     ],
     typeArguments: [
@@ -582,34 +659,12 @@ export function addNaviRedeem(
 }
 
 /**
- * SuiSystem-aware NAVI redeem path. Use this for SUI NAVI markets.
+ * @deprecated Use addNaviRedeem; both now use the SuiSystem-aware route.
  */
 export function addNaviRedeemV2(
   tx: Transaction,
   config: JitterMarketConfig,
   burnRequest: TransactionObjectArgument,
 ): TransactionObjectArgument {
-  return tx.moveCall({
-    target: `${requireConfigValue(config.naviAdapterPackageId, "naviAdapterPackageId")}::navi_market_vault::redeem_v2`,
-    arguments: [
-      burnRequest,
-      tx.object(config.syStateObjectId),
-      tx.object(requireGlobalConfig(config)),
-      tx.object(requireConfigValue(config.naviMarketVaultObjectId, "naviMarketVaultObjectId")),
-      tx.object(config.marketObjectId),
-      tx.object(requireConfigValue(config.naviStorageObjectId, "naviStorageObjectId")),
-      tx.object(requireConfigValue(config.naviPoolObjectId, "naviPoolObjectId")),
-      tx.object(requireConfigValue(config.naviOracleObjectId, "naviOracleObjectId")),
-      tx.object(requireConfigValue(config.naviIncentiveV2ObjectId, "naviIncentiveV2ObjectId")),
-      tx.object(requireConfigValue(config.naviIncentiveV3ObjectId, "naviIncentiveV3ObjectId")),
-      tx.object(requireConfigValue(config.naviSuiSystemStateObjectId, "naviSuiSystemStateObjectId")),
-      tx.object.clock(),
-    ],
-    typeArguments: [
-      config.underlyingTypeTag,
-      config.syTypeTag,
-      config.ptTypeTag,
-      config.ytTypeTag,
-    ],
-  }) as TransactionObjectArgument;
+  return addNaviRedeem(tx, config, burnRequest);
 }

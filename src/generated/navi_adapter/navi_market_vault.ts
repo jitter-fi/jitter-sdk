@@ -21,6 +21,8 @@ export const NaviMarketVault = new MoveStruct({ name: `${$moduleName}::NaviMarke
         market_id: bcs.Address,
         navi_storage_id: bcs.Address,
         navi_pool_id: bcs.Address,
+        incentive_v2_id: bcs.Address,
+        incentive_v3_id: bcs.Address,
         asset_id: bcs.u8(),
         account_cap: account.AccountCap,
         total_underlying_deposited: bcs.u128(),
@@ -61,6 +63,8 @@ export interface CreateMarketVaultBy_ACLArguments {
     market: RawTransactionArgument<string>;
     storage: RawTransactionArgument<string>;
     pool: RawTransactionArgument<string>;
+    incentiveV2: RawTransactionArgument<string>;
+    incentiveV3: RawTransactionArgument<string>;
     assetId: RawTransactionArgument<number>;
 }
 export interface CreateMarketVaultBy_ACLOptions {
@@ -72,6 +76,8 @@ export interface CreateMarketVaultBy_ACLOptions {
         market: RawTransactionArgument<string>,
         storage: RawTransactionArgument<string>,
         pool: RawTransactionArgument<string>,
+        incentiveV2: RawTransactionArgument<string>,
+        incentiveV3: RawTransactionArgument<string>,
         assetId: RawTransactionArgument<number>
     ];
     typeArguments: [
@@ -90,10 +96,12 @@ export function createMarketVaultBy_ACL(options: CreateMarketVaultBy_ACLOptions)
         null,
         null,
         null,
+        null,
+        null,
         'u8',
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["acl", "syState", "globalConfig", "market", "storage", "pool", "assetId"];
+    const parameterNames = ["acl", "syState", "globalConfig", "market", "storage", "pool", "incentiveV2", "incentiveV3", "assetId"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'navi_market_vault',
@@ -109,6 +117,8 @@ export interface CreateMarketVaultByAdminArguments {
     market: RawTransactionArgument<string>;
     storage: RawTransactionArgument<string>;
     pool: RawTransactionArgument<string>;
+    incentiveV2: RawTransactionArgument<string>;
+    incentiveV3: RawTransactionArgument<string>;
     assetId: RawTransactionArgument<number>;
 }
 export interface CreateMarketVaultByAdminOptions {
@@ -120,6 +130,8 @@ export interface CreateMarketVaultByAdminOptions {
         market: RawTransactionArgument<string>,
         storage: RawTransactionArgument<string>,
         pool: RawTransactionArgument<string>,
+        incentiveV2: RawTransactionArgument<string>,
+        incentiveV3: RawTransactionArgument<string>,
         assetId: RawTransactionArgument<number>
     ];
     typeArguments: [
@@ -138,10 +150,12 @@ export function createMarketVaultByAdmin(options: CreateMarketVaultByAdminOption
         null,
         null,
         null,
+        null,
+        null,
         'u8',
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["Admin", "syState", "globalConfig", "market", "storage", "pool", "assetId"];
+    const parameterNames = ["Admin", "syState", "globalConfig", "market", "storage", "pool", "incentiveV2", "incentiveV3", "assetId"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'navi_market_vault',
@@ -159,8 +173,8 @@ export interface DepositArguments {
     market: RawTransactionArgument<string>;
     storage: RawTransactionArgument<string>;
     pool: RawTransactionArgument<string>;
-    incentive: RawTransactionArgument<string>;
     incentiveV2: RawTransactionArgument<string>;
+    incentiveV3: RawTransactionArgument<string>;
 }
 export interface DepositOptions {
     package?: string;
@@ -173,8 +187,8 @@ export interface DepositOptions {
         market: RawTransactionArgument<string>,
         storage: RawTransactionArgument<string>,
         pool: RawTransactionArgument<string>,
-        incentive: RawTransactionArgument<string>,
-        incentiveV2: RawTransactionArgument<string>
+        incentiveV2: RawTransactionArgument<string>,
+        incentiveV3: RawTransactionArgument<string>
     ];
     typeArguments: [
         string,
@@ -202,7 +216,7 @@ export function deposit(options: DepositOptions) {
         null,
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["request", "underlyingCoin", "syState", "globalConfig", "vault", "market", "storage", "pool", "incentive", "incentiveV2"];
+    const parameterNames = ["request", "underlyingCoin", "syState", "globalConfig", "vault", "market", "storage", "pool", "incentiveV2", "incentiveV3"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'navi_market_vault',
@@ -220,8 +234,8 @@ export interface RedeemArguments {
     storage: RawTransactionArgument<string>;
     pool: RawTransactionArgument<string>;
     oracle: RawTransactionArgument<string>;
-    incentive: RawTransactionArgument<string>;
     incentiveV2: RawTransactionArgument<string>;
+    incentiveV3: RawTransactionArgument<string>;
 }
 export interface RedeemOptions {
     package?: string;
@@ -234,8 +248,8 @@ export interface RedeemOptions {
         storage: RawTransactionArgument<string>,
         pool: RawTransactionArgument<string>,
         oracle: RawTransactionArgument<string>,
-        incentive: RawTransactionArgument<string>,
-        incentiveV2: RawTransactionArgument<string>
+        incentiveV2: RawTransactionArgument<string>,
+        incentiveV3: RawTransactionArgument<string>
     ];
     typeArguments: [
         string,
@@ -247,7 +261,7 @@ export interface RedeemOptions {
 /**
  * Burn Jitter SY and withdraw underlying from the adapter-owned NAVI account.
  *
- * This uses NAVI's active `incentive_v2` account-cap withdrawal route.
+ * Uses the v3 incentive route with the v2 withdrawal that also supports SUI.
  */
 export function redeem(options: RedeemOptions) {
     const packageAddress = options.package ?? 'jitter/navi-adapter';
@@ -262,9 +276,10 @@ export function redeem(options: RedeemOptions) {
         null,
         null,
         null,
+        '0x3::sui_system::SuiSystemState',
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["request", "syState", "globalConfig", "vault", "market", "storage", "pool", "oracle", "incentive", "incentiveV2"];
+    const parameterNames = ["request", "syState", "globalConfig", "vault", "market", "storage", "pool", "oracle", "incentiveV2", "incentiveV3"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'navi_market_vault',

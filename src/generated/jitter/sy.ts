@@ -15,6 +15,8 @@ import * as type_name_6 from './deps/std/type_name.js';
 import * as type_name_7 from './deps/std/type_name.js';
 import * as type_name_8 from './deps/std/type_name.js';
 import * as type_name_9 from './deps/std/type_name.js';
+import * as type_name_10 from './deps/std/type_name.js';
+import * as type_name_11 from './deps/std/type_name.js';
 const $moduleName = 'jitter/jitter::sy';
 export const SyInfo = new MoveStruct({ name: `${$moduleName}::SyInfo`, fields: {
         underlying_type: type_name.TypeName,
@@ -41,13 +43,38 @@ export const SyRegisteredEvent = new MoveStruct({ name: `${$moduleName}::SyRegis
         underlying_type: type_name_4.TypeName,
         sign_type: type_name_5.TypeName
     } });
+export const SyStateCreatedEvent = new MoveStruct({ name: `${$moduleName}::SyStateCreatedEvent`, fields: {
+        sy_state_id: bcs.Address
+    } });
+export const SyMintRequestedEvent = new MoveStruct({ name: `${$moduleName}::SyMintRequestedEvent`, fields: {
+        market_id: bcs.Address,
+        sy_amount: bcs.u64(),
+        underlying_amount: bcs.u64()
+    } });
+export const SyBurnRequestedEvent = new MoveStruct({ name: `${$moduleName}::SyBurnRequestedEvent`, fields: {
+        market_id: bcs.Address,
+        sy_amount: bcs.u64(),
+        underlying_amount: bcs.u64()
+    } });
+export const SyBurnCancelledEvent = new MoveStruct({ name: `${$moduleName}::SyBurnCancelledEvent`, fields: {
+        market_id: bcs.Address,
+        vault_id: bcs.Address,
+        sy_amount: bcs.u64()
+    } });
+export const EscrowedSyBurnedEvent = new MoveStruct({ name: `${$moduleName}::EscrowedSyBurnedEvent`, fields: {
+        market_id: bcs.Address,
+        vault_id: bcs.Address,
+        sy_amount: bcs.u64(),
+        sy_type: type_name_6.TypeName,
+        underlying_type: type_name_7.TypeName
+    } });
 export const SyUnregisteredEvent = new MoveStruct({ name: `${$moduleName}::SyUnregisteredEvent`, fields: {
-        sy_type: type_name_6.TypeName
+        sy_type: type_name_8.TypeName
     } });
 export const SyMarketVaultBoundEvent = new MoveStruct({ name: `${$moduleName}::SyMarketVaultBoundEvent`, fields: {
-        sy_type: type_name_7.TypeName,
-        underlying_type: type_name_8.TypeName,
-        sign_type: type_name_9.TypeName,
+        sy_type: type_name_9.TypeName,
+        underlying_type: type_name_10.TypeName,
+        sign_type: type_name_11.TypeName,
         market_id: bcs.Address,
         vault_id: bcs.Address
     } });
@@ -184,7 +211,7 @@ export interface BindMarketVaultOptions<Sign extends BcsType<any>> {
     ];
 }
 /**
- * Bind one registered SY type to its unique economic underlying, MarketState, and
+ * Bind one registered SY type to its unique economic underlying, Market, and
  * adapter vault. The adapter witness prevents arbitrary callers from claiming a
  * registration. V1 intentionally has no replacement path.
  */
@@ -224,7 +251,7 @@ export interface MarketUnderlyingTypeOptions {
 }
 /**
  * Returns the registered economic underlying for an SY type after proving the
- * registration is bound to the expected MarketState.
+ * registration is bound to the expected Market.
  */
 export function marketUnderlyingType(options: MarketUnderlyingTypeOptions) {
     const packageAddress = options.package ?? 'jitter/jitter';

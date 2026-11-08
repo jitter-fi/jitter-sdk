@@ -3,887 +3,421 @@
  **************************************************************/
 
 
-/**
- * market_registry - canonical on-chain project and market registry.
- *
- * The registry does not custody assets. It gives deployment tooling, SDKs, and
- * indexers one source of truth for project-level reward configuration and the
- * object IDs that make up each market.
- */
+/** An admin-curated discovery catalogue. It never authorizes asset movements. */
 
-import { MoveStruct, MoveTuple, normalizeMoveArguments, type RawTransactionArgument } from '../utils/index.js';
-import { bcs } from '@mysten/sui/bcs';
+import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from '../utils/index.js';
+import { bcs, type BcsType } from '@mysten/sui/bcs';
 import { type Transaction } from '@mysten/sui/transactions';
+import * as table from './deps/sui/table.js';
+import * as table_1 from './deps/sui/table.js';
+import * as table_2 from './deps/sui/table.js';
+import * as table_3 from './deps/sui/table.js';
+import * as table_4 from './deps/sui/table.js';
+import * as table_5 from './deps/sui/table.js';
+import * as bag from './deps/sui/bag.js';
+import * as table_6 from './deps/sui/table.js';
 import * as type_name from './deps/std/type_name.js';
 import * as type_name_1 from './deps/std/type_name.js';
+import * as table_7 from './deps/sui/table.js';
 import * as type_name_2 from './deps/std/type_name.js';
 import * as type_name_3 from './deps/std/type_name.js';
 import * as type_name_4 from './deps/std/type_name.js';
+import * as table_8 from './deps/sui/table.js';
+import * as table_9 from './deps/sui/table.js';
 import * as type_name_5 from './deps/std/type_name.js';
 import * as type_name_6 from './deps/std/type_name.js';
+import * as table_10 from './deps/sui/table.js';
 import * as type_name_7 from './deps/std/type_name.js';
+import * as type_name_8 from './deps/std/type_name.js';
+import * as type_name_9 from './deps/std/type_name.js';
+import * as type_name_10 from './deps/std/type_name.js';
+import * as type_name_11 from './deps/std/type_name.js';
+import * as type_name_12 from './deps/std/type_name.js';
+import * as type_name_13 from './deps/std/type_name.js';
+import * as type_name_14 from './deps/std/type_name.js';
+import * as type_name_15 from './deps/std/type_name.js';
+import * as type_name_16 from './deps/std/type_name.js';
+import * as type_name_17 from './deps/std/type_name.js';
+import * as type_name_18 from './deps/std/type_name.js';
+import * as type_name_19 from './deps/std/type_name.js';
+import * as type_name_20 from './deps/std/type_name.js';
+import * as type_name_21 from './deps/std/type_name.js';
 const $moduleName = 'jitter/jitter-registry::market_registry';
-export const MarketRegistry = new MoveStruct({ name: `${$moduleName}::MarketRegistry`, fields: {
+export const Registry = new MoveStruct({ name: `${$moduleName}::Registry`, fields: {
         id: bcs.Address,
-        next_project_id: bcs.u64(),
+        config_id: bcs.Address,
+        admin_cap_id: bcs.Address,
+        sy_state_id: bcs.Address,
+        schema_version: bcs.u64(),
+        next_protocol_id: bcs.u64(),
         next_series_id: bcs.u64(),
-        project_count: bcs.u64(),
-        series_count: bcs.u64(),
-        market_count: bcs.u64(),
-        series_ids: bcs.vector(bcs.u64()),
-        market_ids: bcs.vector(bcs.Address),
-        point_program_ids: bcs.vector(bcs.Address)
+        protocols: table.Table,
+        series: table_1.Table,
+        markets: table_2.Table,
+        programs: table_3.Table,
+        sources: table_4.Table,
+        market_sources: table_5.Table,
+        extensions: bag.Bag
     } });
-export const ProjectKey = new MoveTuple({ name: `${$moduleName}::ProjectKey`, fields: [bcs.u64()] });
-export const SeriesKey = new MoveTuple({ name: `${$moduleName}::SeriesKey`, fields: [bcs.u64()] });
-export const MarketKey = new MoveTuple({ name: `${$moduleName}::MarketKey`, fields: [bcs.Address] });
-export const ProjectPointConfigKey = new MoveTuple({ name: `${$moduleName}::ProjectPointConfigKey`, fields: [bcs.u64()] });
-export const MarketPointConfigKey = new MoveTuple({ name: `${$moduleName}::MarketPointConfigKey`, fields: [bcs.Address] });
-export const PointProgramKey = new MoveTuple({ name: `${$moduleName}::PointProgramKey`, fields: [bcs.Address] });
-export const MarketPointProgramKey = new MoveStruct({ name: `${$moduleName}::MarketPointProgramKey`, fields: {
-        market_id: bcs.Address,
-        point_config_id: bcs.Address
-    } });
-export const MarketPointProgramIdsKey = new MoveTuple({ name: `${$moduleName}::MarketPointProgramIdsKey`, fields: [bcs.Address] });
-export const PointProgramMarketIdsKey = new MoveTuple({ name: `${$moduleName}::PointProgramMarketIdsKey`, fields: [bcs.Address] });
-export const ProjectMetadataKey = new MoveTuple({ name: `${$moduleName}::ProjectMetadataKey`, fields: [bcs.u64()] });
-export const MarketMetadataKey = new MoveTuple({ name: `${$moduleName}::MarketMetadataKey`, fields: [bcs.Address] });
-export const Project = new MoveStruct({ name: `${$moduleName}::Project`, fields: {
-        project_id: bcs.u64(),
-        owner: bcs.Address,
+export const ProtocolMetadata = new MoveStruct({ name: `${$moduleName}::ProtocolMetadata`, fields: {
         name: bcs.vector(bcs.u8()),
-        metadata_uri: bcs.vector(bcs.u8())
-    } });
-export const MarketSeries = new MoveStruct({ name: `${$moduleName}::MarketSeries`, fields: {
-        series_id: bcs.u64(),
-        project_id: bcs.u64(),
-        name: bcs.vector(bcs.u8()),
-        metadata_uri: bcs.vector(bcs.u8()),
-        default_market_id: bcs.Address,
-        market_ids: bcs.vector(bcs.Address),
-        listed: bcs.bool()
-    } });
-export const MarketRecord = new MoveStruct({ name: `${$moduleName}::MarketRecord`, fields: {
-        project_id: bcs.u64(),
-        series_id: bcs.u64(),
-        market_id: bcs.Address,
-        market_state_id: bcs.Address,
-        py_state_id: bcs.Address,
-        pool_id: bcs.Address,
-        reward_distributor_id: bcs.Address,
-        pt_orderbook_id: bcs.Address,
-        yt_orderbook_id: bcs.Address,
-        expiry: bcs.u64(),
-        listed: bcs.bool(),
-        display_rank: bcs.u64()
-    } });
-export const ProjectMetadata = new MoveStruct({ name: `${$moduleName}::ProjectMetadata`, fields: {
-        project_id: bcs.u64(),
+        slug: bcs.vector(bcs.u8()),
         description: bcs.vector(bcs.u8()),
         icon_uri: bcs.vector(bcs.u8()),
-        website_uri: bcs.vector(bcs.u8())
+        website_uri: bcs.vector(bcs.u8()),
+        docs_uri: bcs.vector(bcs.u8()),
+        metadata_uri: bcs.vector(bcs.u8())
     } });
-export const MarketMetadata = new MoveStruct({ name: `${$moduleName}::MarketMetadata`, fields: {
-        project_id: bcs.u64(),
-        series_id: bcs.u64(),
-        market_id: bcs.Address,
-        adapter: bcs.vector(bcs.u8()),
+export const SeriesMetadata = new MoveStruct({ name: `${$moduleName}::SeriesMetadata`, fields: {
         name: bcs.vector(bcs.u8()),
         symbol: bcs.vector(bcs.u8()),
         description: bcs.vector(bcs.u8()),
         icon_uri: bcs.vector(bcs.u8()),
-        metadata_uri: bcs.vector(bcs.u8()),
+        category: bcs.vector(bcs.u8()),
+        metadata_uri: bcs.vector(bcs.u8())
+    } });
+export const MarketMetadata = new MoveStruct({ name: `${$moduleName}::MarketMetadata`, fields: {
+        name: bcs.vector(bcs.u8()),
+        description: bcs.vector(bcs.u8()),
+        icon_uri: bcs.vector(bcs.u8()),
+        metadata_uri: bcs.vector(bcs.u8())
+    } });
+export const ProgramMetadata = new MoveStruct({ name: `${$moduleName}::ProgramMetadata`, fields: {
+        name: bcs.vector(bcs.u8()),
+        season: bcs.vector(bcs.u8()),
+        description: bcs.vector(bcs.u8()),
+        icon_uri: bcs.vector(bcs.u8()),
+        metadata_uri: bcs.vector(bcs.u8())
+    } });
+export const Protocol = new MoveStruct({ name: `${$moduleName}::Protocol`, fields: {
+        protocol_id: bcs.u64(),
+        metadata: ProtocolMetadata,
+        listed: bcs.bool(),
+        display_rank: bcs.u64(),
+        revision: bcs.u64(),
+        series_ids: table_6.Table
+    } });
+export const Series = new MoveStruct({ name: `${$moduleName}::Series`, fields: {
+        series_id: bcs.u64(),
+        protocol_id: bcs.u64(),
         underlying_type: type_name.TypeName,
-        sy_type: type_name_1.TypeName,
-        pt_type: type_name_2.TypeName,
-        yt_type: type_name_3.TypeName
+        receipt_type: type_name_1.TypeName,
+        metadata: SeriesMetadata,
+        default_market_id: bcs.option(bcs.Address),
+        listed: bcs.bool(),
+        display_rank: bcs.u64(),
+        revision: bcs.u64(),
+        market_ids: table_7.Table
     } });
-export const ProjectPointConfig = new MoveStruct({ name: `${$moduleName}::ProjectPointConfig`, fields: {
-        project_id: bcs.u64(),
-        enabled: bcs.bool(),
-        liquidlink_global_config_id: bcs.Address,
-        scoreboard_id: bcs.Address,
-        point_cap_id: bcs.Address,
-        point_config_id: bcs.Address,
-        point_token_market_id: bcs.Address,
-        point_orderbook_id: bcs.Address,
-        point_token_type: bcs.vector(bcs.u8()),
-        quote_coin_type: bcs.vector(bcs.u8()),
-        quote_symbol: bcs.vector(bcs.u8()),
-        yt_multiplier_bps: bcs.u64(),
-        lp_multiplier_bps: bcs.u64(),
-        point_duration_ms: bcs.u64()
-    } });
-export const MarketPointConfig = new MoveStruct({ name: `${$moduleName}::MarketPointConfig`, fields: {
-        project_id: bcs.u64(),
+export const MarketRecord = new MoveStruct({ name: `${$moduleName}::MarketRecord`, fields: {
         market_id: bcs.Address,
-        point_config_id: bcs.Address,
-        lp_point_state_id: bcs.Address,
-        yt_multiplier_bps: bcs.u64(),
-        lp_multiplier_bps: bcs.u64(),
-        point_duration_ms: bcs.u64()
+        series_id: bcs.u64(),
+        expiry_ms: bcs.u64(),
+        sy_type: type_name_2.TypeName,
+        pt_type: type_name_3.TypeName,
+        yt_type: type_name_4.TypeName,
+        metadata: MarketMetadata,
+        listed: bcs.bool(),
+        display_rank: bcs.u64(),
+        revision: bcs.u64(),
+        source_ids: table_8.Table
     } });
 export const PointProgram = new MoveStruct({ name: `${$moduleName}::PointProgram`, fields: {
-        point_config_id: bcs.Address,
-        liquidlink_global_config_id: bcs.Address,
-        project_object_id: bcs.Address,
         scoreboard_id: bcs.Address,
-        name: bcs.vector(bcs.u8()),
-        protocol: bcs.vector(bcs.u8()),
-        season: bcs.vector(bcs.u8()),
-        metadata_uri: bcs.vector(bcs.u8()),
-        enabled: bcs.bool()
+        project_object_id: bcs.Address,
+        liquidlink_config_id: bcs.Address,
+        protocol_id: bcs.option(bcs.u64()),
+        metadata: ProgramMetadata,
+        listed: bcs.bool(),
+        revision: bcs.u64(),
+        source_ids: table_9.Table
     } });
-export const MarketPointProgram = new MoveStruct({ name: `${$moduleName}::MarketPointProgram`, fields: {
+export const PointSource = new MoveStruct({ name: `${$moduleName}::PointSource`, fields: {
+        source_id: bcs.Address,
+        scoreboard_id: bcs.Address,
+        policy_type: type_name_5.TypeName,
+        source_type: type_name_6.TypeName,
+        label: bcs.vector(bcs.u8()),
+        archived: bcs.bool(),
+        revision: bcs.u64(),
+        market_ids: table_10.Table
+    } });
+export const MarketSourceKey = new MoveStruct({ name: `${$moduleName}::MarketSourceKey`, fields: {
         market_id: bcs.Address,
-        point_config_id: bcs.Address,
-        lp_point_state_id: bcs.Address,
+        source_id: bcs.Address
+    } });
+export const MarketPointSource = new MoveStruct({ name: `${$moduleName}::MarketPointSource`, fields: {
+        market_id: bcs.Address,
+        source_id: bcs.Address,
+        lp_point_state_id: bcs.option(bcs.Address),
         yt_enabled: bcs.bool(),
         lp_enabled: bcs.bool(),
-        pool_enabled: bcs.bool()
+        archived: bcs.bool(),
+        revision: bcs.u64()
     } });
-export const ProjectRegistered = new MoveStruct({ name: `${$moduleName}::ProjectRegistered`, fields: {
+export const ScallopBinding = new MoveStruct({ name: `${$moduleName}::ScallopBinding`, fields: {
+        scallop_market_id: bcs.Address,
+        version_id: bcs.Address
+    } });
+export const HaedalBinding = new MoveStruct({ name: `${$moduleName}::HaedalBinding`, fields: {
+        staking_id: bcs.Address
+    } });
+export const EmberBinding = new MoveStruct({ name: `${$moduleName}::EmberBinding`, fields: {
+        ember_vault_id: bcs.Address
+    } });
+export const AdapterKey = new MoveStruct({ name: `${$moduleName}::AdapterKey<phantom Payload>`, fields: {
+        market_id: bcs.Address
+    } });
+export function AdapterBinding<Payload extends BcsType<any>>(...typeParameters: [
+    Payload
+]) {
+    return new MoveStruct({ name: `${$moduleName}::AdapterBinding<${typeParameters[0].name as Payload['name']}>`, fields: {
+            market_id: bcs.Address,
+            adapter_type: type_name_7.TypeName,
+            vault_id: bcs.Address,
+            revision: bcs.u64(),
+            payload: typeParameters[0]
+        } });
+}
+export const OrderbookKey = new MoveStruct({ name: `${$moduleName}::OrderbookKey`, fields: {
+        market_id: bcs.Address
+    } });
+export const OrderbookLinks = new MoveStruct({ name: `${$moduleName}::OrderbookLinks`, fields: {
+        pt_orderbook_id: bcs.option(bcs.Address),
+        yt_orderbook_id: bcs.option(bcs.Address),
+        revision: bcs.u64()
+    } });
+export const PointTradingKey = new MoveStruct({ name: `${$moduleName}::PointTradingKey`, fields: {
+        scoreboard_id: bcs.Address
+    } });
+export const PointTradingLink = new MoveStruct({ name: `${$moduleName}::PointTradingLink`, fields: {
+        scoreboard_id: bcs.Address,
+        point_token_market_id: bcs.Address,
+        orderbook_id: bcs.option(bcs.Address),
+        revision: bcs.u64()
+    } });
+export const RegistryCreated = new MoveStruct({ name: `${$moduleName}::RegistryCreated`, fields: {
         registry_id: bcs.Address,
-        project_id: bcs.u64(),
-        owner: bcs.Address,
-        name: bcs.vector(bcs.u8()),
-        metadata_uri: bcs.vector(bcs.u8())
+        creator: bcs.Address,
+        config_id: bcs.Address,
+        admin_cap_id: bcs.Address,
+        sy_state_id: bcs.Address,
+        schema_version: bcs.u64()
+    } });
+export const ProtocolRegistered = new MoveStruct({ name: `${$moduleName}::ProtocolRegistered`, fields: {
+        registry_id: bcs.Address,
+        protocol_id: bcs.u64(),
+        metadata: ProtocolMetadata,
+        listed: bcs.bool(),
+        display_rank: bcs.u64(),
+        revision: bcs.u64()
+    } });
+export const ProtocolUpdated = new MoveStruct({ name: `${$moduleName}::ProtocolUpdated`, fields: {
+        registry_id: bcs.Address,
+        protocol_id: bcs.u64(),
+        metadata: ProtocolMetadata,
+        listed: bcs.bool(),
+        display_rank: bcs.u64(),
+        revision: bcs.u64()
     } });
 export const SeriesRegistered = new MoveStruct({ name: `${$moduleName}::SeriesRegistered`, fields: {
         registry_id: bcs.Address,
-        project_id: bcs.u64(),
         series_id: bcs.u64(),
-        name: bcs.vector(bcs.u8()),
-        metadata_uri: bcs.vector(bcs.u8()),
-        listed: bcs.bool()
+        protocol_id: bcs.u64(),
+        underlying_type: type_name_8.TypeName,
+        receipt_type: type_name_9.TypeName,
+        metadata: SeriesMetadata,
+        default_market_id: bcs.option(bcs.Address),
+        listed: bcs.bool(),
+        display_rank: bcs.u64(),
+        revision: bcs.u64()
     } });
-export const SeriesListedUpdated = new MoveStruct({ name: `${$moduleName}::SeriesListedUpdated`, fields: {
+export const SeriesUpdated = new MoveStruct({ name: `${$moduleName}::SeriesUpdated`, fields: {
         registry_id: bcs.Address,
-        project_id: bcs.u64(),
         series_id: bcs.u64(),
-        listed: bcs.bool()
-    } });
-export const SeriesDefaultMarketUpdated = new MoveStruct({ name: `${$moduleName}::SeriesDefaultMarketUpdated`, fields: {
-        registry_id: bcs.Address,
-        project_id: bcs.u64(),
-        series_id: bcs.u64(),
-        default_market_id: bcs.Address
+        protocol_id: bcs.u64(),
+        underlying_type: type_name_10.TypeName,
+        receipt_type: type_name_11.TypeName,
+        metadata: SeriesMetadata,
+        default_market_id: bcs.option(bcs.Address),
+        listed: bcs.bool(),
+        display_rank: bcs.u64(),
+        revision: bcs.u64()
     } });
 export const MarketRegistered = new MoveStruct({ name: `${$moduleName}::MarketRegistered`, fields: {
         registry_id: bcs.Address,
-        project_id: bcs.u64(),
-        series_id: bcs.u64(),
         market_id: bcs.Address,
-        market_state_id: bcs.Address,
-        py_state_id: bcs.Address,
-        pool_id: bcs.Address,
-        reward_distributor_id: bcs.Address,
-        expiry: bcs.u64(),
+        series_id: bcs.u64(),
+        expiry_ms: bcs.u64(),
+        sy_type: type_name_12.TypeName,
+        pt_type: type_name_13.TypeName,
+        yt_type: type_name_14.TypeName,
+        metadata: MarketMetadata,
         listed: bcs.bool(),
-        display_rank: bcs.u64()
+        display_rank: bcs.u64(),
+        revision: bcs.u64()
     } });
-export const MarketOrderbookUpdated = new MoveStruct({ name: `${$moduleName}::MarketOrderbookUpdated`, fields: {
+export const MarketUpdated = new MoveStruct({ name: `${$moduleName}::MarketUpdated`, fields: {
         registry_id: bcs.Address,
         market_id: bcs.Address,
-        pt_orderbook_id: bcs.Address,
-        yt_orderbook_id: bcs.Address
-    } });
-export const MarketListedUpdated = new MoveStruct({ name: `${$moduleName}::MarketListedUpdated`, fields: {
-        registry_id: bcs.Address,
-        project_id: bcs.u64(),
         series_id: bcs.u64(),
-        market_id: bcs.Address,
+        expiry_ms: bcs.u64(),
+        sy_type: type_name_15.TypeName,
+        pt_type: type_name_16.TypeName,
+        yt_type: type_name_17.TypeName,
+        metadata: MarketMetadata,
         listed: bcs.bool(),
-        display_rank: bcs.u64()
+        display_rank: bcs.u64(),
+        revision: bcs.u64()
     } });
-export const ProjectMetadataUpdated = new MoveStruct({ name: `${$moduleName}::ProjectMetadataUpdated`, fields: {
+export const ProgramRegistered = new MoveStruct({ name: `${$moduleName}::ProgramRegistered`, fields: {
         registry_id: bcs.Address,
-        project_id: bcs.u64(),
-        description: bcs.vector(bcs.u8()),
-        icon_uri: bcs.vector(bcs.u8()),
-        website_uri: bcs.vector(bcs.u8())
-    } });
-export const MarketMetadataUpdated = new MoveStruct({ name: `${$moduleName}::MarketMetadataUpdated`, fields: {
-        registry_id: bcs.Address,
-        project_id: bcs.u64(),
-        series_id: bcs.u64(),
-        market_id: bcs.Address,
-        adapter: bcs.vector(bcs.u8()),
-        name: bcs.vector(bcs.u8()),
-        symbol: bcs.vector(bcs.u8()),
-        description: bcs.vector(bcs.u8()),
-        icon_uri: bcs.vector(bcs.u8()),
-        metadata_uri: bcs.vector(bcs.u8()),
-        underlying_type: type_name_4.TypeName,
-        sy_type: type_name_5.TypeName,
-        pt_type: type_name_6.TypeName,
-        yt_type: type_name_7.TypeName
-    } });
-export const ProjectPointConfigUpdated = new MoveStruct({ name: `${$moduleName}::ProjectPointConfigUpdated`, fields: {
-        registry_id: bcs.Address,
-        project_id: bcs.u64(),
-        enabled: bcs.bool(),
-        liquidlink_global_config_id: bcs.Address,
         scoreboard_id: bcs.Address,
-        point_cap_id: bcs.Address,
-        point_config_id: bcs.Address,
-        point_token_market_id: bcs.Address,
-        point_orderbook_id: bcs.Address,
-        point_token_type: bcs.vector(bcs.u8()),
-        quote_coin_type: bcs.vector(bcs.u8()),
-        quote_symbol: bcs.vector(bcs.u8()),
-        yt_multiplier_bps: bcs.u64(),
-        lp_multiplier_bps: bcs.u64(),
-        point_duration_ms: bcs.u64()
-    } });
-export const MarketPointConfigUpdated = new MoveStruct({ name: `${$moduleName}::MarketPointConfigUpdated`, fields: {
-        registry_id: bcs.Address,
-        project_id: bcs.u64(),
-        market_id: bcs.Address,
-        point_config_id: bcs.Address,
-        lp_point_state_id: bcs.Address,
-        yt_multiplier_bps: bcs.u64(),
-        lp_multiplier_bps: bcs.u64(),
-        point_duration_ms: bcs.u64()
-    } });
-export const PointProgramRegistered = new MoveStruct({ name: `${$moduleName}::PointProgramRegistered`, fields: {
-        registry_id: bcs.Address,
-        point_config_id: bcs.Address,
-        liquidlink_global_config_id: bcs.Address,
         project_object_id: bcs.Address,
-        scoreboard_id: bcs.Address,
-        name: bcs.vector(bcs.u8()),
-        protocol: bcs.vector(bcs.u8()),
-        season: bcs.vector(bcs.u8()),
-        metadata_uri: bcs.vector(bcs.u8()),
-        enabled: bcs.bool()
+        liquidlink_config_id: bcs.Address,
+        protocol_id: bcs.option(bcs.u64()),
+        metadata: ProgramMetadata,
+        listed: bcs.bool(),
+        revision: bcs.u64()
     } });
-export const PointProgramEnabledUpdated = new MoveStruct({ name: `${$moduleName}::PointProgramEnabledUpdated`, fields: {
+export const ProgramUpdated = new MoveStruct({ name: `${$moduleName}::ProgramUpdated`, fields: {
         registry_id: bcs.Address,
-        point_config_id: bcs.Address,
-        enabled: bcs.bool()
+        scoreboard_id: bcs.Address,
+        project_object_id: bcs.Address,
+        liquidlink_config_id: bcs.Address,
+        protocol_id: bcs.option(bcs.u64()),
+        metadata: ProgramMetadata,
+        listed: bcs.bool(),
+        revision: bcs.u64()
     } });
-export const MarketPointProgramAttached = new MoveStruct({ name: `${$moduleName}::MarketPointProgramAttached`, fields: {
+export const SourceRegistered = new MoveStruct({ name: `${$moduleName}::SourceRegistered`, fields: {
+        registry_id: bcs.Address,
+        source_id: bcs.Address,
+        scoreboard_id: bcs.Address,
+        policy_type: type_name_18.TypeName,
+        source_type: type_name_19.TypeName,
+        label: bcs.vector(bcs.u8()),
+        archived: bcs.bool(),
+        revision: bcs.u64()
+    } });
+export const SourceArchived = new MoveStruct({ name: `${$moduleName}::SourceArchived`, fields: {
+        registry_id: bcs.Address,
+        source_id: bcs.Address,
+        archived: bcs.bool(),
+        revision: bcs.u64()
+    } });
+export const MarketSourceAttached = new MoveStruct({ name: `${$moduleName}::MarketSourceAttached`, fields: {
         registry_id: bcs.Address,
         market_id: bcs.Address,
-        point_config_id: bcs.Address,
-        lp_point_state_id: bcs.Address,
+        source_id: bcs.Address,
+        lp_point_state_id: bcs.option(bcs.Address),
         yt_enabled: bcs.bool(),
         lp_enabled: bcs.bool(),
-        pool_enabled: bcs.bool()
+        archived: bcs.bool(),
+        revision: bcs.u64()
     } });
-export const MarketPointProgramDetached = new MoveStruct({ name: `${$moduleName}::MarketPointProgramDetached`, fields: {
+export const MarketSourceArchived = new MoveStruct({ name: `${$moduleName}::MarketSourceArchived`, fields: {
         registry_id: bcs.Address,
         market_id: bcs.Address,
-        point_config_id: bcs.Address
+        source_id: bcs.Address,
+        archived: bcs.bool(),
+        revision: bcs.u64()
     } });
-export interface CreateByAdminArguments {
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-}
-export interface CreateByAdminOptions {
-    package?: string;
-    arguments: CreateByAdminArguments | [
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>
-    ];
-}
-export function createByAdmin(options: CreateByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null
-    ] satisfies (string | null)[];
-    const parameterNames = ["globalConfig", "AdminCap"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'create_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface CreateAndShareByAdminArguments {
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-}
-export interface CreateAndShareByAdminOptions {
-    package?: string;
-    arguments: CreateAndShareByAdminArguments | [
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>
-    ];
-}
-export function createAndShareByAdmin(options: CreateAndShareByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null
-    ] satisfies (string | null)[];
-    const parameterNames = ["globalConfig", "AdminCap"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'create_and_share_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface RegisterProjectByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
+export const MarketSourceUpdated = new MoveStruct({ name: `${$moduleName}::MarketSourceUpdated`, fields: {
+        registry_id: bcs.Address,
+        market_id: bcs.Address,
+        source_id: bcs.Address,
+        lp_point_state_id: bcs.option(bcs.Address),
+        yt_enabled: bcs.bool(),
+        lp_enabled: bcs.bool(),
+        archived: bcs.bool(),
+        revision: bcs.u64()
+    } });
+export const AdapterBindingUpdated = new MoveStruct({ name: `${$moduleName}::AdapterBindingUpdated`, fields: {
+        registry_id: bcs.Address,
+        market_id: bcs.Address,
+        adapter_type: type_name_20.TypeName,
+        payload_type: type_name_21.TypeName,
+        vault_id: bcs.Address,
+        revision: bcs.u64(),
+        payload_bcs: bcs.vector(bcs.u8())
+    } });
+export const OrderbooksUpdated = new MoveStruct({ name: `${$moduleName}::OrderbooksUpdated`, fields: {
+        registry_id: bcs.Address,
+        market_id: bcs.Address,
+        pt_orderbook_id: bcs.option(bcs.Address),
+        yt_orderbook_id: bcs.option(bcs.Address),
+        revision: bcs.u64()
+    } });
+export const PointTradingUpdated = new MoveStruct({ name: `${$moduleName}::PointTradingUpdated`, fields: {
+        registry_id: bcs.Address,
+        scoreboard_id: bcs.Address,
+        point_token_market_id: bcs.Address,
+        orderbook_id: bcs.option(bcs.Address),
+        revision: bcs.u64()
+    } });
+export interface ProtocolMetadataArguments {
     name: RawTransactionArgument<Array<number>>;
-    metadataUri: RawTransactionArgument<Array<number>>;
-}
-export interface RegisterProjectByAdminOptions {
-    package?: string;
-    arguments: RegisterProjectByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        name: RawTransactionArgument<Array<number>>,
-        metadataUri: RawTransactionArgument<Array<number>>
-    ];
-}
-export function registerProjectByAdmin(options: RegisterProjectByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        'vector<u8>',
-        'vector<u8>'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "name", "metadataUri"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'register_project_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface SetProjectMetadataByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
+    slug: RawTransactionArgument<Array<number>>;
     description: RawTransactionArgument<Array<number>>;
     iconUri: RawTransactionArgument<Array<number>>;
     websiteUri: RawTransactionArgument<Array<number>>;
+    docsUri: RawTransactionArgument<Array<number>>;
+    metadataUri: RawTransactionArgument<Array<number>>;
 }
-export interface SetProjectMetadataByAdminOptions {
+export interface ProtocolMetadataOptions {
     package?: string;
-    arguments: SetProjectMetadataByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>,
+    arguments: ProtocolMetadataArguments | [
+        name: RawTransactionArgument<Array<number>>,
+        slug: RawTransactionArgument<Array<number>>,
         description: RawTransactionArgument<Array<number>>,
         iconUri: RawTransactionArgument<Array<number>>,
-        websiteUri: RawTransactionArgument<Array<number>>
+        websiteUri: RawTransactionArgument<Array<number>>,
+        docsUri: RawTransactionArgument<Array<number>>,
+        metadataUri: RawTransactionArgument<Array<number>>
     ];
 }
-export function setProjectMetadataByAdmin(options: SetProjectMetadataByAdminOptions) {
+export function protocolMetadata(options: ProtocolMetadataOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-registry';
     const argumentsTypes = [
-        null,
-        null,
-        null,
-        'u64',
+        'vector<u8>',
+        'vector<u8>',
+        'vector<u8>',
+        'vector<u8>',
         'vector<u8>',
         'vector<u8>',
         'vector<u8>'
     ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "projectId", "description", "iconUri", "websiteUri"];
+    const parameterNames = ["name", "slug", "description", "iconUri", "websiteUri", "docsUri", "metadataUri"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
-        function: 'set_project_metadata_by_admin',
+        function: 'protocol_metadata',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
-export interface SetProjectPointConfigByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-    enabled: RawTransactionArgument<boolean>;
-    liquidlinkGlobalConfigId: RawTransactionArgument<string>;
-    scoreboardId: RawTransactionArgument<string>;
-    pointCapId: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-    pointTokenMarketId: RawTransactionArgument<string>;
-    pointOrderbookId: RawTransactionArgument<string>;
-    pointTokenType: RawTransactionArgument<Array<number>>;
-    quoteCoinType: RawTransactionArgument<Array<number>>;
-    quoteSymbol: RawTransactionArgument<Array<number>>;
-    ytMultiplierBps: RawTransactionArgument<number | bigint>;
-    lpMultiplierBps: RawTransactionArgument<number | bigint>;
-    pointDurationMs: RawTransactionArgument<number | bigint>;
-}
-export interface SetProjectPointConfigByAdminOptions {
-    package?: string;
-    arguments: SetProjectPointConfigByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>,
-        enabled: RawTransactionArgument<boolean>,
-        liquidlinkGlobalConfigId: RawTransactionArgument<string>,
-        scoreboardId: RawTransactionArgument<string>,
-        pointCapId: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>,
-        pointTokenMarketId: RawTransactionArgument<string>,
-        pointOrderbookId: RawTransactionArgument<string>,
-        pointTokenType: RawTransactionArgument<Array<number>>,
-        quoteCoinType: RawTransactionArgument<Array<number>>,
-        quoteSymbol: RawTransactionArgument<Array<number>>,
-        ytMultiplierBps: RawTransactionArgument<number | bigint>,
-        lpMultiplierBps: RawTransactionArgument<number | bigint>,
-        pointDurationMs: RawTransactionArgument<number | bigint>
-    ];
-}
-export function setProjectPointConfigByAdmin(options: SetProjectPointConfigByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        'u64',
-        'bool',
-        '0x2::object::ID',
-        '0x2::object::ID',
-        '0x2::object::ID',
-        '0x2::object::ID',
-        '0x2::object::ID',
-        '0x2::object::ID',
-        'vector<u8>',
-        'vector<u8>',
-        'vector<u8>',
-        'u64',
-        'u64',
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "projectId", "enabled", "liquidlinkGlobalConfigId", "scoreboardId", "pointCapId", "pointConfigId", "pointTokenMarketId", "pointOrderbookId", "pointTokenType", "quoteCoinType", "quoteSymbol", "ytMultiplierBps", "lpMultiplierBps", "pointDurationMs"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'set_project_point_config_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface ClearProjectPointConfigByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-}
-export interface ClearProjectPointConfigByAdminOptions {
-    package?: string;
-    arguments: ClearProjectPointConfigByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function clearProjectPointConfigByAdmin(options: ClearProjectPointConfigByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "projectId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'clear_project_point_config_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface RegisterPointProgramByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    liquidlinkGlobalConfigId: RawTransactionArgument<string>;
-    projectObjectId: RawTransactionArgument<string>;
-    scoreboardId: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-    name: RawTransactionArgument<Array<number>>;
-    protocol: RawTransactionArgument<Array<number>>;
-    season: RawTransactionArgument<Array<number>>;
-    metadataUri: RawTransactionArgument<Array<number>>;
-    enabled: RawTransactionArgument<boolean>;
-}
-export interface RegisterPointProgramByAdminOptions {
-    package?: string;
-    arguments: RegisterPointProgramByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        liquidlinkGlobalConfigId: RawTransactionArgument<string>,
-        projectObjectId: RawTransactionArgument<string>,
-        scoreboardId: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>,
-        name: RawTransactionArgument<Array<number>>,
-        protocol: RawTransactionArgument<Array<number>>,
-        season: RawTransactionArgument<Array<number>>,
-        metadataUri: RawTransactionArgument<Array<number>>,
-        enabled: RawTransactionArgument<boolean>
-    ];
-}
-/**
- * Registers one Scoreboard + PointConfig program for discovery. A program can be
- * attached to markets from any registry project.
- */
-export function registerPointProgramByAdmin(options: RegisterPointProgramByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        '0x2::object::ID',
-        '0x2::object::ID',
-        '0x2::object::ID',
-        '0x2::object::ID',
-        'vector<u8>',
-        'vector<u8>',
-        'vector<u8>',
-        'vector<u8>',
-        'bool'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "liquidlinkGlobalConfigId", "projectObjectId", "scoreboardId", "pointConfigId", "name", "protocol", "season", "metadataUri", "enabled"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'register_point_program_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface SetPointProgramEnabledByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-    enabled: RawTransactionArgument<boolean>;
-}
-export interface SetPointProgramEnabledByAdminOptions {
-    package?: string;
-    arguments: SetPointProgramEnabledByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>,
-        enabled: RawTransactionArgument<boolean>
-    ];
-}
-/** A program can only be disabled after all market attachments are removed. */
-export function setPointProgramEnabledByAdmin(options: SetPointProgramEnabledByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        '0x2::object::ID',
-        'bool'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "pointConfigId", "enabled"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'set_point_program_enabled_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface AttachMarketStatePointProgramByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    state: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-    lpPointStateId: RawTransactionArgument<string>;
-    ytEnabled: RawTransactionArgument<boolean>;
-    lpEnabled: RawTransactionArgument<boolean>;
-    poolEnabled: RawTransactionArgument<boolean>;
-}
-export interface AttachMarketStatePointProgramByAdminOptions {
-    package?: string;
-    arguments: AttachMarketStatePointProgramByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        state: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>,
-        lpPointStateId: RawTransactionArgument<string>,
-        ytEnabled: RawTransactionArgument<boolean>,
-        lpEnabled: RawTransactionArgument<boolean>,
-        poolEnabled: RawTransactionArgument<boolean>
-    ];
-    typeArguments: [
-        string,
-        string,
-        string
-    ];
-}
-export function attachMarketStatePointProgramByAdmin(options: AttachMarketStatePointProgramByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        null,
-        '0x2::object::ID',
-        '0x2::object::ID',
-        'bool',
-        'bool',
-        'bool'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "state", "pointConfigId", "lpPointStateId", "ytEnabled", "lpEnabled", "poolEnabled"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'attach_market_state_point_program_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        typeArguments: options.typeArguments
-    });
-}
-export interface DetachMarketStatePointProgramByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    state: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-}
-export interface DetachMarketStatePointProgramByAdminOptions {
-    package?: string;
-    arguments: DetachMarketStatePointProgramByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        state: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>
-    ];
-    typeArguments: [
-        string,
-        string,
-        string
-    ];
-}
-export function detachMarketStatePointProgramByAdmin(options: DetachMarketStatePointProgramByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "state", "pointConfigId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'detach_market_state_point_program_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        typeArguments: options.typeArguments
-    });
-}
-export interface RegisterSeriesByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-    name: RawTransactionArgument<Array<number>>;
-    metadataUri: RawTransactionArgument<Array<number>>;
-    listed: RawTransactionArgument<boolean>;
-}
-export interface RegisterSeriesByAdminOptions {
-    package?: string;
-    arguments: RegisterSeriesByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>,
-        name: RawTransactionArgument<Array<number>>,
-        metadataUri: RawTransactionArgument<Array<number>>,
-        listed: RawTransactionArgument<boolean>
-    ];
-}
-export function registerSeriesByAdmin(options: RegisterSeriesByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        'u64',
-        'vector<u8>',
-        'vector<u8>',
-        'bool'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "projectId", "name", "metadataUri", "listed"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'register_series_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface SetSeriesListedByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    seriesId: RawTransactionArgument<number | bigint>;
-    listed: RawTransactionArgument<boolean>;
-}
-export interface SetSeriesListedByAdminOptions {
-    package?: string;
-    arguments: SetSeriesListedByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        seriesId: RawTransactionArgument<number | bigint>,
-        listed: RawTransactionArgument<boolean>
-    ];
-}
-export function setSeriesListedByAdmin(options: SetSeriesListedByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        'u64',
-        'bool'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "seriesId", "listed"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'set_series_listed_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface SetDefaultMarketByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    seriesId: RawTransactionArgument<number | bigint>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface SetDefaultMarketByAdminOptions {
-    package?: string;
-    arguments: SetDefaultMarketByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        seriesId: RawTransactionArgument<number | bigint>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function setDefaultMarketByAdmin(options: SetDefaultMarketByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        'u64',
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "seriesId", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'set_default_market_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface RegisterMarketStateByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    seriesId: RawTransactionArgument<number | bigint>;
-    state: RawTransactionArgument<string>;
-    listed: RawTransactionArgument<boolean>;
-    displayRank: RawTransactionArgument<number | bigint>;
-}
-export interface RegisterMarketStateByAdminOptions {
-    package?: string;
-    arguments: RegisterMarketStateByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        seriesId: RawTransactionArgument<number | bigint>,
-        state: RawTransactionArgument<string>,
-        listed: RawTransactionArgument<boolean>,
-        displayRank: RawTransactionArgument<number | bigint>
-    ];
-    typeArguments: [
-        string,
-        string,
-        string
-    ];
-}
-export function registerMarketStateByAdmin(options: RegisterMarketStateByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        'u64',
-        null,
-        'bool',
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "seriesId", "state", "listed", "displayRank"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'register_market_state_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        typeArguments: options.typeArguments
-    });
-}
-export interface SetMarketStateMetadataByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    syState: RawTransactionArgument<string>;
-    state: RawTransactionArgument<string>;
-    adapter: RawTransactionArgument<Array<number>>;
+export interface SeriesMetadataArguments {
     name: RawTransactionArgument<Array<number>>;
     symbol: RawTransactionArgument<Array<number>>;
     description: RawTransactionArgument<Array<number>>;
     iconUri: RawTransactionArgument<Array<number>>;
+    category: RawTransactionArgument<Array<number>>;
     metadataUri: RawTransactionArgument<Array<number>>;
 }
-export interface SetMarketStateMetadataByAdminOptions {
+export interface SeriesMetadataOptions {
     package?: string;
-    arguments: SetMarketStateMetadataByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        syState: RawTransactionArgument<string>,
-        state: RawTransactionArgument<string>,
-        adapter: RawTransactionArgument<Array<number>>,
+    arguments: SeriesMetadataArguments | [
         name: RawTransactionArgument<Array<number>>,
         symbol: RawTransactionArgument<Array<number>>,
         description: RawTransactionArgument<Array<number>>,
         iconUri: RawTransactionArgument<Array<number>>,
+        category: RawTransactionArgument<Array<number>>,
         metadataUri: RawTransactionArgument<Array<number>>
     ];
-    typeArguments: [
-        string,
-        string,
-        string
-    ];
 }
-export function setMarketStateMetadataByAdmin(options: SetMarketStateMetadataByAdminOptions) {
+export function seriesMetadata(options: SeriesMetadataOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-registry';
     const argumentsTypes = [
-        null,
-        null,
-        null,
-        null,
-        null,
         'vector<u8>',
         'vector<u8>',
         'vector<u8>',
@@ -891,211 +425,151 @@ export function setMarketStateMetadataByAdmin(options: SetMarketStateMetadataByA
         'vector<u8>',
         'vector<u8>'
     ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "syState", "state", "adapter", "name", "symbol", "description", "iconUri", "metadataUri"];
+    const parameterNames = ["name", "symbol", "description", "iconUri", "category", "metadataUri"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
-        function: 'set_market_state_metadata_by_admin',
+        function: 'series_metadata',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        typeArguments: options.typeArguments
     });
 }
-export interface SetMarketStateListingByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    state: RawTransactionArgument<string>;
-    listed: RawTransactionArgument<boolean>;
-    displayRank: RawTransactionArgument<number | bigint>;
+export interface MarketMetadataArguments {
+    name: RawTransactionArgument<Array<number>>;
+    description: RawTransactionArgument<Array<number>>;
+    iconUri: RawTransactionArgument<Array<number>>;
+    metadataUri: RawTransactionArgument<Array<number>>;
 }
-export interface SetMarketStateListingByAdminOptions {
+export interface MarketMetadataOptions {
     package?: string;
-    arguments: SetMarketStateListingByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        state: RawTransactionArgument<string>,
-        listed: RawTransactionArgument<boolean>,
-        displayRank: RawTransactionArgument<number | bigint>
-    ];
-    typeArguments: [
-        string,
-        string,
-        string
+    arguments: MarketMetadataArguments | [
+        name: RawTransactionArgument<Array<number>>,
+        description: RawTransactionArgument<Array<number>>,
+        iconUri: RawTransactionArgument<Array<number>>,
+        metadataUri: RawTransactionArgument<Array<number>>
     ];
 }
-export function setMarketStateListingByAdmin(options: SetMarketStateListingByAdminOptions) {
+export function marketMetadata(options: MarketMetadataOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        'vector<u8>',
+        'vector<u8>',
+        'vector<u8>',
+        'vector<u8>'
+    ] satisfies (string | null)[];
+    const parameterNames = ["name", "description", "iconUri", "metadataUri"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'market_metadata',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface ProgramMetadataArguments {
+    name: RawTransactionArgument<Array<number>>;
+    season: RawTransactionArgument<Array<number>>;
+    description: RawTransactionArgument<Array<number>>;
+    iconUri: RawTransactionArgument<Array<number>>;
+    metadataUri: RawTransactionArgument<Array<number>>;
+}
+export interface ProgramMetadataOptions {
+    package?: string;
+    arguments: ProgramMetadataArguments | [
+        name: RawTransactionArgument<Array<number>>,
+        season: RawTransactionArgument<Array<number>>,
+        description: RawTransactionArgument<Array<number>>,
+        iconUri: RawTransactionArgument<Array<number>>,
+        metadataUri: RawTransactionArgument<Array<number>>
+    ];
+}
+export function programMetadata(options: ProgramMetadataOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        'vector<u8>',
+        'vector<u8>',
+        'vector<u8>',
+        'vector<u8>',
+        'vector<u8>'
+    ] satisfies (string | null)[];
+    const parameterNames = ["name", "season", "description", "iconUri", "metadataUri"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'program_metadata',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface CreateArguments {
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    syState: RawTransactionArgument<string>;
+}
+export interface CreateOptions {
+    package?: string;
+    arguments: CreateArguments | [
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        syState: RawTransactionArgument<string>
+    ];
+}
+export function create(options: CreateOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-registry';
     const argumentsTypes = [
         null,
         null,
-        null,
-        null,
-        'bool',
-        'u64'
+        null
     ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "state", "listed", "displayRank"];
+    const parameterNames = ["config", "admin", "syState"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
-        function: 'set_market_state_listing_by_admin',
+        function: 'create',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        typeArguments: options.typeArguments
     });
 }
-export interface SetMarketStatePtOrderbookIdByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    state: RawTransactionArgument<string>;
-    orderbookId: RawTransactionArgument<string>;
+export interface CreateSharedArguments {
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    syState: RawTransactionArgument<string>;
 }
-export interface SetMarketStatePtOrderbookIdByAdminOptions {
+export interface CreateSharedOptions {
     package?: string;
-    arguments: SetMarketStatePtOrderbookIdByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        state: RawTransactionArgument<string>,
-        orderbookId: RawTransactionArgument<string>
-    ];
-    typeArguments: [
-        string,
-        string,
-        string
+    arguments: CreateSharedArguments | [
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        syState: RawTransactionArgument<string>
     ];
 }
-export function setMarketStatePtOrderbookIdByAdmin(options: SetMarketStatePtOrderbookIdByAdminOptions) {
+export function createShared(options: CreateSharedOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-registry';
     const argumentsTypes = [
         null,
         null,
-        null,
-        null,
-        '0x2::object::ID'
+        null
     ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "state", "orderbookId"];
+    const parameterNames = ["config", "admin", "syState"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
-        function: 'set_market_state_pt_orderbook_id_by_admin',
+        function: 'create_shared',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        typeArguments: options.typeArguments
     });
 }
-export interface SetMarketStateYtOrderbookIdByAdminArguments {
+export interface RegisterProtocolArguments {
     registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    state: RawTransactionArgument<string>;
-    orderbookId: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    metadata: RawTransactionArgument<string>;
 }
-export interface SetMarketStateYtOrderbookIdByAdminOptions {
+export interface RegisterProtocolOptions {
     package?: string;
-    arguments: SetMarketStateYtOrderbookIdByAdminArguments | [
+    arguments: RegisterProtocolArguments | [
         registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        state: RawTransactionArgument<string>,
-        orderbookId: RawTransactionArgument<string>
-    ];
-    typeArguments: [
-        string,
-        string,
-        string
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        metadata: RawTransactionArgument<string>
     ];
 }
-export function setMarketStateYtOrderbookIdByAdmin(options: SetMarketStateYtOrderbookIdByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "state", "orderbookId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'set_market_state_yt_orderbook_id_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        typeArguments: options.typeArguments
-    });
-}
-export interface SetMarketStatePointConfigByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    state: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-    lpPointStateId: RawTransactionArgument<string>;
-    ytMultiplierBps: RawTransactionArgument<number | bigint>;
-    lpMultiplierBps: RawTransactionArgument<number | bigint>;
-    pointDurationMs: RawTransactionArgument<number | bigint>;
-}
-export interface SetMarketStatePointConfigByAdminOptions {
-    package?: string;
-    arguments: SetMarketStatePointConfigByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        state: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>,
-        lpPointStateId: RawTransactionArgument<string>,
-        ytMultiplierBps: RawTransactionArgument<number | bigint>,
-        lpMultiplierBps: RawTransactionArgument<number | bigint>,
-        pointDurationMs: RawTransactionArgument<number | bigint>
-    ];
-    typeArguments: [
-        string,
-        string,
-        string
-    ];
-}
-export function setMarketStatePointConfigByAdmin(options: SetMarketStatePointConfigByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        null,
-        '0x2::object::ID',
-        '0x2::object::ID',
-        'u64',
-        'u64',
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "state", "pointConfigId", "lpPointStateId", "ytMultiplierBps", "lpMultiplierBps", "pointDurationMs"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'set_market_state_point_config_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-        typeArguments: options.typeArguments
-    });
-}
-export interface ClearMarketStatePointConfigByAdminArguments {
-    registry: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    state: RawTransactionArgument<string>;
-}
-export interface ClearMarketStatePointConfigByAdminOptions {
-    package?: string;
-    arguments: ClearMarketStatePointConfigByAdminArguments | [
-        registry: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        state: RawTransactionArgument<string>
-    ];
-    typeArguments: [
-        string,
-        string,
-        string
-    ];
-}
-export function clearMarketStatePointConfigByAdmin(options: ClearMarketStatePointConfigByAdminOptions) {
+export function registerProtocol(options: RegisterProtocolOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-registry';
     const argumentsTypes = [
         null,
@@ -1103,13 +577,892 @@ export function clearMarketStatePointConfigByAdmin(options: ClearMarketStatePoin
         null,
         null
     ] satisfies (string | null)[];
-    const parameterNames = ["registry", "globalConfig", "AdminCap", "state"];
+    const parameterNames = ["registry", "config", "admin", "metadata"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
-        function: 'clear_market_state_point_config_by_admin',
+        function: 'register_protocol',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface RegisterSeriesArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    protocolId: RawTransactionArgument<number | bigint>;
+    metadata: RawTransactionArgument<string>;
+}
+export interface RegisterSeriesOptions {
+    package?: string;
+    arguments: RegisterSeriesArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        protocolId: RawTransactionArgument<number | bigint>,
+        metadata: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string
+    ];
+}
+export function registerSeries(options: RegisterSeriesOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        'u64',
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "protocolId", "metadata"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'register_series',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
+    });
+}
+export interface RegisterMarketArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    syState: RawTransactionArgument<string>;
+    seriesId: RawTransactionArgument<number | bigint>;
+    market: RawTransactionArgument<string>;
+    metadata: RawTransactionArgument<string>;
+}
+export interface RegisterMarketOptions {
+    package?: string;
+    arguments: RegisterMarketArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        syState: RawTransactionArgument<string>,
+        seriesId: RawTransactionArgument<number | bigint>,
+        market: RawTransactionArgument<string>,
+        metadata: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+export function registerMarket(options: RegisterMarketOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        'u64',
+        null,
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "syState", "seriesId", "market", "metadata"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'register_market',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface RegisterProgramArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    scoreboardId: RawTransactionArgument<string>;
+    projectObjectId: RawTransactionArgument<string>;
+    liquidlinkConfigId: RawTransactionArgument<string>;
+    protocolId: RawTransactionArgument<number | bigint | null>;
+    metadata: RawTransactionArgument<string>;
+}
+export interface RegisterProgramOptions {
+    package?: string;
+    arguments: RegisterProgramArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        scoreboardId: RawTransactionArgument<string>,
+        projectObjectId: RawTransactionArgument<string>,
+        liquidlinkConfigId: RawTransactionArgument<string>,
+        protocolId: RawTransactionArgument<number | bigint | null>,
+        metadata: RawTransactionArgument<string>
+    ];
+}
+export function registerProgram(options: RegisterProgramOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::object::ID',
+        '0x2::object::ID',
+        '0x2::object::ID',
+        '0x1::option::Option<u64>',
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "scoreboardId", "projectObjectId", "liquidlinkConfigId", "protocolId", "metadata"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'register_program',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface RegisterSourceArguments<Source extends BcsType<any>> {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    scoreboardId: RawTransactionArgument<string>;
+    source: RawTransactionArgument<Source>;
+    label: RawTransactionArgument<Array<number>>;
+}
+export interface RegisterSourceOptions<Source extends BcsType<any>> {
+    package?: string;
+    arguments: RegisterSourceArguments<Source> | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        scoreboardId: RawTransactionArgument<string>,
+        source: RawTransactionArgument<Source>,
+        label: RawTransactionArgument<Array<number>>
+    ];
+    typeArguments: [
+        string,
+        string
+    ];
+}
+export function registerSource<Source extends BcsType<any>>(options: RegisterSourceOptions<Source>) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::object::ID',
+        `${options.typeArguments[0]}`,
+        'vector<u8>'
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "scoreboardId", "source", "label"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'register_source',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface AttachSourceArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    marketId: RawTransactionArgument<string>;
+    sourceId: RawTransactionArgument<string>;
+    lpPointStateId: RawTransactionArgument<string | null>;
+    ytEnabled: RawTransactionArgument<boolean>;
+    lpEnabled: RawTransactionArgument<boolean>;
+}
+export interface AttachSourceOptions {
+    package?: string;
+    arguments: AttachSourceArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        marketId: RawTransactionArgument<string>,
+        sourceId: RawTransactionArgument<string>,
+        lpPointStateId: RawTransactionArgument<string | null>,
+        ytEnabled: RawTransactionArgument<boolean>,
+        lpEnabled: RawTransactionArgument<boolean>
+    ];
+}
+export function attachSource(options: AttachSourceOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::object::ID',
+        '0x2::object::ID',
+        '0x1::option::Option<0x2::object::ID>',
+        'bool',
+        'bool'
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "marketId", "sourceId", "lpPointStateId", "ytEnabled", "lpEnabled"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'attach_source',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface UpdateMarketSourceArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    marketId: RawTransactionArgument<string>;
+    sourceId: RawTransactionArgument<string>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    lpPointStateId: RawTransactionArgument<string | null>;
+    ytEnabled: RawTransactionArgument<boolean>;
+    lpEnabled: RawTransactionArgument<boolean>;
+}
+export interface UpdateMarketSourceOptions {
+    package?: string;
+    arguments: UpdateMarketSourceArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        marketId: RawTransactionArgument<string>,
+        sourceId: RawTransactionArgument<string>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        lpPointStateId: RawTransactionArgument<string | null>,
+        ytEnabled: RawTransactionArgument<boolean>,
+        lpEnabled: RawTransactionArgument<boolean>
+    ];
+}
+/** Correct a discovery association without deleting its history or memberships. */
+export function updateMarketSource(options: UpdateMarketSourceOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::object::ID',
+        '0x2::object::ID',
+        'u64',
+        '0x1::option::Option<0x2::object::ID>',
+        'bool',
+        'bool'
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "marketId", "sourceId", "expectedRevision", "lpPointStateId", "ytEnabled", "lpEnabled"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'update_market_source',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface UpdateProtocolArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    protocolId: RawTransactionArgument<number | bigint>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    metadata: RawTransactionArgument<string>;
+}
+export interface UpdateProtocolOptions {
+    package?: string;
+    arguments: UpdateProtocolArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        protocolId: RawTransactionArgument<number | bigint>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        metadata: RawTransactionArgument<string>
+    ];
+}
+export function updateProtocol(options: UpdateProtocolOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        'u64',
+        'u64',
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "protocolId", "expectedRevision", "metadata"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'update_protocol',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface UpdateSeriesArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    seriesId: RawTransactionArgument<number | bigint>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    metadata: RawTransactionArgument<string>;
+}
+export interface UpdateSeriesOptions {
+    package?: string;
+    arguments: UpdateSeriesArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        seriesId: RawTransactionArgument<number | bigint>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        metadata: RawTransactionArgument<string>
+    ];
+}
+export function updateSeries(options: UpdateSeriesOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        'u64',
+        'u64',
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "seriesId", "expectedRevision", "metadata"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'update_series',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface UpdateMarketArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    marketId: RawTransactionArgument<string>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    metadata: RawTransactionArgument<string>;
+}
+export interface UpdateMarketOptions {
+    package?: string;
+    arguments: UpdateMarketArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        marketId: RawTransactionArgument<string>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        metadata: RawTransactionArgument<string>
+    ];
+}
+export function updateMarket(options: UpdateMarketOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::object::ID',
+        'u64',
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "marketId", "expectedRevision", "metadata"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'update_market',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface UpdateProgramArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    scoreboardId: RawTransactionArgument<string>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    metadata: RawTransactionArgument<string>;
+}
+export interface UpdateProgramOptions {
+    package?: string;
+    arguments: UpdateProgramArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        scoreboardId: RawTransactionArgument<string>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        metadata: RawTransactionArgument<string>
+    ];
+}
+export function updateProgram(options: UpdateProgramOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::object::ID',
+        'u64',
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "scoreboardId", "expectedRevision", "metadata"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'update_program',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface SetProtocolListingArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    protocolId: RawTransactionArgument<number | bigint>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    listed: RawTransactionArgument<boolean>;
+    displayRank: RawTransactionArgument<number | bigint>;
+}
+export interface SetProtocolListingOptions {
+    package?: string;
+    arguments: SetProtocolListingArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        protocolId: RawTransactionArgument<number | bigint>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        listed: RawTransactionArgument<boolean>,
+        displayRank: RawTransactionArgument<number | bigint>
+    ];
+}
+export function setProtocolListing(options: SetProtocolListingOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        'u64',
+        'u64',
+        'bool',
+        'u64'
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "protocolId", "expectedRevision", "listed", "displayRank"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'set_protocol_listing',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface SetSeriesListingArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    seriesId: RawTransactionArgument<number | bigint>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    listed: RawTransactionArgument<boolean>;
+    displayRank: RawTransactionArgument<number | bigint>;
+}
+export interface SetSeriesListingOptions {
+    package?: string;
+    arguments: SetSeriesListingArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        seriesId: RawTransactionArgument<number | bigint>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        listed: RawTransactionArgument<boolean>,
+        displayRank: RawTransactionArgument<number | bigint>
+    ];
+}
+export function setSeriesListing(options: SetSeriesListingOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        'u64',
+        'u64',
+        'bool',
+        'u64'
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "seriesId", "expectedRevision", "listed", "displayRank"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'set_series_listing',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface SetMarketListingArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    marketId: RawTransactionArgument<string>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    listed: RawTransactionArgument<boolean>;
+    displayRank: RawTransactionArgument<number | bigint>;
+}
+export interface SetMarketListingOptions {
+    package?: string;
+    arguments: SetMarketListingArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        marketId: RawTransactionArgument<string>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        listed: RawTransactionArgument<boolean>,
+        displayRank: RawTransactionArgument<number | bigint>
+    ];
+}
+export function setMarketListing(options: SetMarketListingOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::object::ID',
+        'u64',
+        'bool',
+        'u64'
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "marketId", "expectedRevision", "listed", "displayRank"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'set_market_listing',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface SetProgramListingArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    scoreboardId: RawTransactionArgument<string>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    listed: RawTransactionArgument<boolean>;
+}
+export interface SetProgramListingOptions {
+    package?: string;
+    arguments: SetProgramListingArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        scoreboardId: RawTransactionArgument<string>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        listed: RawTransactionArgument<boolean>
+    ];
+}
+export function setProgramListing(options: SetProgramListingOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::object::ID',
+        'u64',
+        'bool'
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "scoreboardId", "expectedRevision", "listed"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'set_program_listing',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface SetDefaultMarketArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    seriesId: RawTransactionArgument<number | bigint>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    marketId: RawTransactionArgument<string | null>;
+}
+export interface SetDefaultMarketOptions {
+    package?: string;
+    arguments: SetDefaultMarketArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        seriesId: RawTransactionArgument<number | bigint>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        marketId: RawTransactionArgument<string | null>
+    ];
+}
+export function setDefaultMarket(options: SetDefaultMarketOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        'u64',
+        'u64',
+        '0x1::option::Option<0x2::object::ID>'
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "seriesId", "expectedRevision", "marketId"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'set_default_market',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface ArchiveSourceArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    sourceId: RawTransactionArgument<string>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    archived: RawTransactionArgument<boolean>;
+}
+export interface ArchiveSourceOptions {
+    package?: string;
+    arguments: ArchiveSourceArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        sourceId: RawTransactionArgument<string>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        archived: RawTransactionArgument<boolean>
+    ];
+}
+export function archiveSource(options: ArchiveSourceOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::object::ID',
+        'u64',
+        'bool'
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "sourceId", "expectedRevision", "archived"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'archive_source',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface ArchiveMarketSourceArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    marketId: RawTransactionArgument<string>;
+    sourceId: RawTransactionArgument<string>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    archived: RawTransactionArgument<boolean>;
+}
+export interface ArchiveMarketSourceOptions {
+    package?: string;
+    arguments: ArchiveMarketSourceArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        marketId: RawTransactionArgument<string>,
+        sourceId: RawTransactionArgument<string>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        archived: RawTransactionArgument<boolean>
+    ];
+}
+export function archiveMarketSource(options: ArchiveMarketSourceOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::object::ID',
+        '0x2::object::ID',
+        'u64',
+        'bool'
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "marketId", "sourceId", "expectedRevision", "archived"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'archive_market_source',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface ScallopBindingArguments {
+    scallopMarketId: RawTransactionArgument<string>;
+    versionId: RawTransactionArgument<string>;
+}
+export interface ScallopBindingOptions {
+    package?: string;
+    arguments: ScallopBindingArguments | [
+        scallopMarketId: RawTransactionArgument<string>,
+        versionId: RawTransactionArgument<string>
+    ];
+}
+export function scallopBinding(options: ScallopBindingOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        '0x2::object::ID',
+        '0x2::object::ID'
+    ] satisfies (string | null)[];
+    const parameterNames = ["scallopMarketId", "versionId"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'scallop_binding',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface HaedalBindingArguments {
+    stakingId: RawTransactionArgument<string>;
+}
+export interface HaedalBindingOptions {
+    package?: string;
+    arguments: HaedalBindingArguments | [
+        stakingId: RawTransactionArgument<string>
+    ];
+}
+export function haedalBinding(options: HaedalBindingOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        '0x2::object::ID'
+    ] satisfies (string | null)[];
+    const parameterNames = ["stakingId"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'haedal_binding',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface EmberBindingArguments {
+    emberVaultId: RawTransactionArgument<string>;
+}
+export interface EmberBindingOptions {
+    package?: string;
+    arguments: EmberBindingArguments | [
+        emberVaultId: RawTransactionArgument<string>
+    ];
+}
+export function emberBinding(options: EmberBindingOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        '0x2::object::ID'
+    ] satisfies (string | null)[];
+    const parameterNames = ["emberVaultId"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'ember_binding',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface SetAdapterBindingArguments<Payload extends BcsType<any>> {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    syState: RawTransactionArgument<string>;
+    market: RawTransactionArgument<string>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    vaultId: RawTransactionArgument<string>;
+    payload: RawTransactionArgument<Payload>;
+}
+export interface SetAdapterBindingOptions<Payload extends BcsType<any>> {
+    package?: string;
+    arguments: SetAdapterBindingArguments<Payload> | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        syState: RawTransactionArgument<string>,
+        market: RawTransactionArgument<string>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        vaultId: RawTransactionArgument<string>,
+        payload: RawTransactionArgument<Payload>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string,
+        string,
+        string
+    ];
+}
+/** Descriptors are curated; clients verify actual SyState and Vault before use. */
+export function setAdapterBinding<Payload extends BcsType<any>>(options: SetAdapterBindingOptions<Payload>) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        null,
+        'u64',
+        '0x2::object::ID',
+        `${options.typeArguments[4]}`
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "syState", "market", "expectedRevision", "vaultId", "payload"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'set_adapter_binding',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface SetOrderbooksArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    marketId: RawTransactionArgument<string>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    ptOrderbookId: RawTransactionArgument<string | null>;
+    ytOrderbookId: RawTransactionArgument<string | null>;
+}
+export interface SetOrderbooksOptions {
+    package?: string;
+    arguments: SetOrderbooksArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        marketId: RawTransactionArgument<string>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        ptOrderbookId: RawTransactionArgument<string | null>,
+        ytOrderbookId: RawTransactionArgument<string | null>
+    ];
+}
+export function setOrderbooks(options: SetOrderbooksOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::object::ID',
+        'u64',
+        '0x1::option::Option<0x2::object::ID>',
+        '0x1::option::Option<0x2::object::ID>'
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "marketId", "expectedRevision", "ptOrderbookId", "ytOrderbookId"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'set_orderbooks',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface SetPointTradingArguments {
+    registry: RawTransactionArgument<string>;
+    config: RawTransactionArgument<string>;
+    admin: RawTransactionArgument<string>;
+    scoreboardId: RawTransactionArgument<string>;
+    expectedRevision: RawTransactionArgument<number | bigint>;
+    pointTokenMarketId: RawTransactionArgument<string>;
+    orderbookId: RawTransactionArgument<string | null>;
+}
+export interface SetPointTradingOptions {
+    package?: string;
+    arguments: SetPointTradingArguments | [
+        registry: RawTransactionArgument<string>,
+        config: RawTransactionArgument<string>,
+        admin: RawTransactionArgument<string>,
+        scoreboardId: RawTransactionArgument<string>,
+        expectedRevision: RawTransactionArgument<number | bigint>,
+        pointTokenMarketId: RawTransactionArgument<string>,
+        orderbookId: RawTransactionArgument<string | null>
+    ];
+}
+export function setPointTrading(options: SetPointTradingOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-registry';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        '0x2::object::ID',
+        'u64',
+        '0x2::object::ID',
+        '0x1::option::Option<0x2::object::ID>'
+    ] satisfies (string | null)[];
+    const parameterNames = ["registry", "config", "admin", "scoreboardId", "expectedRevision", "pointTokenMarketId", "orderbookId"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market_registry',
+        function: 'set_point_trading',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
 export interface IdArguments {
@@ -1134,16 +1487,16 @@ export function id(options: IdOptions) {
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
-export interface ProjectCountArguments {
+export interface CountsArguments {
     registry: RawTransactionArgument<string>;
 }
-export interface ProjectCountOptions {
+export interface CountsOptions {
     package?: string;
-    arguments: ProjectCountArguments | [
+    arguments: CountsArguments | [
         registry: RawTransactionArgument<string>
     ];
 }
-export function projectCount(options: ProjectCountOptions) {
+export function counts(options: CountsOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-registry';
     const argumentsTypes = [
         null
@@ -1152,1166 +1505,44 @@ export function projectCount(options: ProjectCountOptions) {
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
-        function: 'project_count',
+        function: 'counts',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
-export interface SeriesCountArguments {
+export interface ProtocolArguments {
     registry: RawTransactionArgument<string>;
+    id: RawTransactionArgument<number | bigint>;
 }
-export interface SeriesCountOptions {
+export interface ProtocolOptions {
     package?: string;
-    arguments: SeriesCountArguments | [
-        registry: RawTransactionArgument<string>
-    ];
-}
-export function seriesCount(options: SeriesCountOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'series_count',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketCountArguments {
-    registry: RawTransactionArgument<string>;
-}
-export interface MarketCountOptions {
-    package?: string;
-    arguments: MarketCountArguments | [
-        registry: RawTransactionArgument<string>
-    ];
-}
-export function marketCount(options: MarketCountOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_count',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface ProjectIdAtArguments {
-    registry: RawTransactionArgument<string>;
-    index: RawTransactionArgument<number | bigint>;
-}
-export interface ProjectIdAtOptions {
-    package?: string;
-    arguments: ProjectIdAtArguments | [
+    arguments: ProtocolArguments | [
         registry: RawTransactionArgument<string>,
-        index: RawTransactionArgument<number | bigint>
+        id: RawTransactionArgument<number | bigint>
     ];
 }
-export function projectIdAt(options: ProjectIdAtOptions) {
+export function protocol(options: ProtocolOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-registry';
     const argumentsTypes = [
         null,
         'u64'
     ] satisfies (string | null)[];
-    const parameterNames = ["registry", "index"];
+    const parameterNames = ["registry", "id"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
-        function: 'project_id_at',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface SeriesIdAtArguments {
-    registry: RawTransactionArgument<string>;
-    index: RawTransactionArgument<number | bigint>;
-}
-export interface SeriesIdAtOptions {
-    package?: string;
-    arguments: SeriesIdAtArguments | [
-        registry: RawTransactionArgument<string>,
-        index: RawTransactionArgument<number | bigint>
-    ];
-}
-export function seriesIdAt(options: SeriesIdAtOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "index"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'series_id_at',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketIdAtArguments {
-    registry: RawTransactionArgument<string>;
-    index: RawTransactionArgument<number | bigint>;
-}
-export interface MarketIdAtOptions {
-    package?: string;
-    arguments: MarketIdAtArguments | [
-        registry: RawTransactionArgument<string>,
-        index: RawTransactionArgument<number | bigint>
-    ];
-}
-export function marketIdAt(options: MarketIdAtOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "index"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_id_at',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface SeriesIdsArguments {
-    registry: RawTransactionArgument<string>;
-}
-export interface SeriesIdsOptions {
-    package?: string;
-    arguments: SeriesIdsArguments | [
-        registry: RawTransactionArgument<string>
-    ];
-}
-export function seriesIds(options: SeriesIdsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'series_ids',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketIdsArguments {
-    registry: RawTransactionArgument<string>;
-}
-export interface MarketIdsOptions {
-    package?: string;
-    arguments: MarketIdsArguments | [
-        registry: RawTransactionArgument<string>
-    ];
-}
-export function marketIds(options: MarketIdsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_ids',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface ProjectExistsArguments {
-    registry: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-}
-export interface ProjectExistsOptions {
-    package?: string;
-    arguments: ProjectExistsArguments | [
-        registry: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function projectExists(options: ProjectExistsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "projectId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'project_exists',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface ProjectMetadataExistsArguments {
-    registry: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-}
-export interface ProjectMetadataExistsOptions {
-    package?: string;
-    arguments: ProjectMetadataExistsArguments | [
-        registry: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function projectMetadataExists(options: ProjectMetadataExistsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "projectId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'project_metadata_exists',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface ProjectMetadataArguments {
-    registry: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-}
-export interface ProjectMetadataOptions {
-    package?: string;
-    arguments: ProjectMetadataArguments | [
-        registry: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function projectMetadata(options: ProjectMetadataOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "projectId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'project_metadata',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface SeriesExistsArguments {
-    registry: RawTransactionArgument<string>;
-    seriesId: RawTransactionArgument<number | bigint>;
-}
-export interface SeriesExistsOptions {
-    package?: string;
-    arguments: SeriesExistsArguments | [
-        registry: RawTransactionArgument<string>,
-        seriesId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function seriesExists(options: SeriesExistsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "seriesId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'series_exists',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketRegisteredArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketRegisteredOptions {
-    package?: string;
-    arguments: MarketRegisteredArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketRegistered(options: MarketRegisteredOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_registered',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketMetadataExistsArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketMetadataExistsOptions {
-    package?: string;
-    arguments: MarketMetadataExistsArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketMetadataExists(options: MarketMetadataExistsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_metadata_exists',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketMetadataArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketMetadataOptions {
-    package?: string;
-    arguments: MarketMetadataArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketMetadata(options: MarketMetadataOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_metadata',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface ProjectPointConfigExistsArguments {
-    registry: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-}
-export interface ProjectPointConfigExistsOptions {
-    package?: string;
-    arguments: ProjectPointConfigExistsArguments | [
-        registry: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function projectPointConfigExists(options: ProjectPointConfigExistsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "projectId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'project_point_config_exists',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface ProjectPointConfigArguments {
-    registry: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-}
-export interface ProjectPointConfigOptions {
-    package?: string;
-    arguments: ProjectPointConfigArguments | [
-        registry: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function projectPointConfig(options: ProjectPointConfigOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "projectId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'project_point_config',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface ProjectPointsEnabledArguments {
-    registry: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-}
-export interface ProjectPointsEnabledOptions {
-    package?: string;
-    arguments: ProjectPointsEnabledArguments | [
-        registry: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function projectPointsEnabled(options: ProjectPointsEnabledOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "projectId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'project_points_enabled',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface ProjectPointConfigIdsArguments {
-    registry: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-}
-export interface ProjectPointConfigIdsOptions {
-    package?: string;
-    arguments: ProjectPointConfigIdsArguments | [
-        registry: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function projectPointConfigIds(options: ProjectPointConfigIdsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "projectId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'project_point_config_ids',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface ProjectPointConfigMetadataArguments {
-    registry: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-}
-export interface ProjectPointConfigMetadataOptions {
-    package?: string;
-    arguments: ProjectPointConfigMetadataArguments | [
-        registry: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function projectPointConfigMetadata(options: ProjectPointConfigMetadataOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "projectId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'project_point_config_metadata',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface ProjectPointConfigParamsArguments {
-    registry: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-}
-export interface ProjectPointConfigParamsOptions {
-    package?: string;
-    arguments: ProjectPointConfigParamsArguments | [
-        registry: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function projectPointConfigParams(options: ProjectPointConfigParamsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "projectId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'project_point_config_params',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketProjectIdArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketProjectIdOptions {
-    package?: string;
-    arguments: MarketProjectIdArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketProjectId(options: MarketProjectIdOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_project_id',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketSeriesIdArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketSeriesIdOptions {
-    package?: string;
-    arguments: MarketSeriesIdArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketSeriesId(options: MarketSeriesIdOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_series_id',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketStateIdArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketStateIdOptions {
-    package?: string;
-    arguments: MarketStateIdArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketStateId(options: MarketStateIdOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_state_id',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketRewardDistributorIdArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketRewardDistributorIdOptions {
-    package?: string;
-    arguments: MarketRewardDistributorIdArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketRewardDistributorId(options: MarketRewardDistributorIdOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_reward_distributor_id',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketPointConfigExistsArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketPointConfigExistsOptions {
-    package?: string;
-    arguments: MarketPointConfigExistsArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketPointConfigExists(options: MarketPointConfigExistsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_point_config_exists',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketPointConfigArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketPointConfigOptions {
-    package?: string;
-    arguments: MarketPointConfigArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketPointConfig(options: MarketPointConfigOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_point_config',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketLpPointStateIdArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketLpPointStateIdOptions {
-    package?: string;
-    arguments: MarketLpPointStateIdArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketLpPointStateId(options: MarketLpPointStateIdOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_lp_point_state_id',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketPointConfigIdsArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketPointConfigIdsOptions {
-    package?: string;
-    arguments: MarketPointConfigIdsArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketPointConfigIds(options: MarketPointConfigIdsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_point_config_ids',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketPointConfigParamsArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketPointConfigParamsOptions {
-    package?: string;
-    arguments: MarketPointConfigParamsArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketPointConfigParams(options: MarketPointConfigParamsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_point_config_params',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface PointProgramCountArguments {
-    registry: RawTransactionArgument<string>;
-}
-export interface PointProgramCountOptions {
-    package?: string;
-    arguments: PointProgramCountArguments | [
-        registry: RawTransactionArgument<string>
-    ];
-}
-export function pointProgramCount(options: PointProgramCountOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'point_program_count',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface PointProgramIdAtArguments {
-    registry: RawTransactionArgument<string>;
-    index: RawTransactionArgument<number | bigint>;
-}
-export interface PointProgramIdAtOptions {
-    package?: string;
-    arguments: PointProgramIdAtArguments | [
-        registry: RawTransactionArgument<string>,
-        index: RawTransactionArgument<number | bigint>
-    ];
-}
-export function pointProgramIdAt(options: PointProgramIdAtOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "index"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'point_program_id_at',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface PointProgramIdsArguments {
-    registry: RawTransactionArgument<string>;
-}
-export interface PointProgramIdsOptions {
-    package?: string;
-    arguments: PointProgramIdsArguments | [
-        registry: RawTransactionArgument<string>
-    ];
-}
-export function pointProgramIds(options: PointProgramIdsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'point_program_ids',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface PointProgramExistsArguments {
-    registry: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-}
-export interface PointProgramExistsOptions {
-    package?: string;
-    arguments: PointProgramExistsArguments | [
-        registry: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>
-    ];
-}
-export function pointProgramExists(options: PointProgramExistsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "pointConfigId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'point_program_exists',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface PointProgramArguments {
-    registry: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-}
-export interface PointProgramOptions {
-    package?: string;
-    arguments: PointProgramArguments | [
-        registry: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>
-    ];
-}
-export function pointProgram(options: PointProgramOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "pointConfigId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'point_program',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface PointProgramIdsConfigArguments {
-    registry: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-}
-export interface PointProgramIdsConfigOptions {
-    package?: string;
-    arguments: PointProgramIdsConfigArguments | [
-        registry: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>
-    ];
-}
-export function pointProgramIdsConfig(options: PointProgramIdsConfigOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "pointConfigId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'point_program_ids_config',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface PointProgramMetadataArguments {
-    registry: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-}
-export interface PointProgramMetadataOptions {
-    package?: string;
-    arguments: PointProgramMetadataArguments | [
-        registry: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>
-    ];
-}
-export function pointProgramMetadata(options: PointProgramMetadataOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "pointConfigId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'point_program_metadata',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketPointProgramExistsArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-}
-export interface MarketPointProgramExistsOptions {
-    package?: string;
-    arguments: MarketPointProgramExistsArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>
-    ];
-}
-export function marketPointProgramExists(options: MarketPointProgramExistsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID',
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId", "pointConfigId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_point_program_exists',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketPointProgramArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-}
-export interface MarketPointProgramOptions {
-    package?: string;
-    arguments: MarketPointProgramArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>
-    ];
-}
-export function marketPointProgram(options: MarketPointProgramOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID',
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId", "pointConfigId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_point_program',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketPointProgramConfigArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-}
-export interface MarketPointProgramConfigOptions {
-    package?: string;
-    arguments: MarketPointProgramConfigArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>
-    ];
-}
-export function marketPointProgramConfig(options: MarketPointProgramConfigOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID',
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId", "pointConfigId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_point_program_config',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketPointProgramCountArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketPointProgramCountOptions {
-    package?: string;
-    arguments: MarketPointProgramCountArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketPointProgramCount(options: MarketPointProgramCountOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_point_program_count',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketPointProgramIdAtArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-    index: RawTransactionArgument<number | bigint>;
-}
-export interface MarketPointProgramIdAtOptions {
-    package?: string;
-    arguments: MarketPointProgramIdAtArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>,
-        index: RawTransactionArgument<number | bigint>
-    ];
-}
-export function marketPointProgramIdAt(options: MarketPointProgramIdAtOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID',
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId", "index"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_point_program_id_at',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketPointProgramIdsArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketPointProgramIdsOptions {
-    package?: string;
-    arguments: MarketPointProgramIdsArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketPointProgramIds(options: MarketPointProgramIdsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'market_point_program_ids',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface PointProgramMarketCountArguments {
-    registry: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-}
-export interface PointProgramMarketCountOptions {
-    package?: string;
-    arguments: PointProgramMarketCountArguments | [
-        registry: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>
-    ];
-}
-export function pointProgramMarketCount(options: PointProgramMarketCountOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "pointConfigId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'point_program_market_count',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface PointProgramMarketIdAtArguments {
-    registry: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-    index: RawTransactionArgument<number | bigint>;
-}
-export interface PointProgramMarketIdAtOptions {
-    package?: string;
-    arguments: PointProgramMarketIdAtArguments | [
-        registry: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>,
-        index: RawTransactionArgument<number | bigint>
-    ];
-}
-export function pointProgramMarketIdAt(options: PointProgramMarketIdAtOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID',
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "pointConfigId", "index"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'point_program_market_id_at',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface PointProgramMarketIdsArguments {
-    registry: RawTransactionArgument<string>;
-    pointConfigId: RawTransactionArgument<string>;
-}
-export interface PointProgramMarketIdsOptions {
-    package?: string;
-    arguments: PointProgramMarketIdsArguments | [
-        registry: RawTransactionArgument<string>,
-        pointConfigId: RawTransactionArgument<string>
-    ];
-}
-export function pointProgramMarketIds(options: PointProgramMarketIdsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "pointConfigId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'point_program_market_ids',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface ProjectArguments {
-    registry: RawTransactionArgument<string>;
-    projectId: RawTransactionArgument<number | bigint>;
-}
-export interface ProjectOptions {
-    package?: string;
-    arguments: ProjectArguments | [
-        registry: RawTransactionArgument<string>,
-        projectId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function project(options: ProjectOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "projectId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'project',
+        function: 'protocol',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
 export interface SeriesArguments {
     registry: RawTransactionArgument<string>;
-    seriesId: RawTransactionArgument<number | bigint>;
+    id: RawTransactionArgument<number | bigint>;
 }
 export interface SeriesOptions {
     package?: string;
     arguments: SeriesArguments | [
         registry: RawTransactionArgument<string>,
-        seriesId: RawTransactionArgument<number | bigint>
+        id: RawTransactionArgument<number | bigint>
     ];
 }
 export function series(options: SeriesOptions) {
@@ -2320,7 +1551,7 @@ export function series(options: SeriesOptions) {
         null,
         'u64'
     ] satisfies (string | null)[];
-    const parameterNames = ["registry", "seriesId"];
+    const parameterNames = ["registry", "id"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
@@ -2328,294 +1559,128 @@ export function series(options: SeriesOptions) {
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
-export interface SeriesAtArguments {
+export interface MarketArguments {
     registry: RawTransactionArgument<string>;
-    index: RawTransactionArgument<number | bigint>;
+    id: RawTransactionArgument<string>;
 }
-export interface SeriesAtOptions {
+export interface MarketOptions {
     package?: string;
-    arguments: SeriesAtArguments | [
+    arguments: MarketArguments | [
         registry: RawTransactionArgument<string>,
-        index: RawTransactionArgument<number | bigint>
+        id: RawTransactionArgument<string>
     ];
 }
-export function seriesAt(options: SeriesAtOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "index"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'series_at',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface SeriesMarketIdAtArguments {
-    registry: RawTransactionArgument<string>;
-    seriesId: RawTransactionArgument<number | bigint>;
-    index: RawTransactionArgument<number | bigint>;
-}
-export interface SeriesMarketIdAtOptions {
-    package?: string;
-    arguments: SeriesMarketIdAtArguments | [
-        registry: RawTransactionArgument<string>,
-        seriesId: RawTransactionArgument<number | bigint>,
-        index: RawTransactionArgument<number | bigint>
-    ];
-}
-export function seriesMarketIdAt(options: SeriesMarketIdAtOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64',
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "seriesId", "index"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'series_market_id_at',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface SeriesMarketIdsArguments {
-    registry: RawTransactionArgument<string>;
-    seriesId: RawTransactionArgument<number | bigint>;
-}
-export interface SeriesMarketIdsOptions {
-    package?: string;
-    arguments: SeriesMarketIdsArguments | [
-        registry: RawTransactionArgument<string>,
-        seriesId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function seriesMarketIds(options: SeriesMarketIdsOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "seriesId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'series_market_ids',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface SeriesProjectIdArguments {
-    registry: RawTransactionArgument<string>;
-    seriesId: RawTransactionArgument<number | bigint>;
-}
-export interface SeriesProjectIdOptions {
-    package?: string;
-    arguments: SeriesProjectIdArguments | [
-        registry: RawTransactionArgument<string>,
-        seriesId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function seriesProjectId(options: SeriesProjectIdOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "seriesId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'series_project_id',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface SeriesDefaultMarketIdArguments {
-    registry: RawTransactionArgument<string>;
-    seriesId: RawTransactionArgument<number | bigint>;
-}
-export interface SeriesDefaultMarketIdOptions {
-    package?: string;
-    arguments: SeriesDefaultMarketIdArguments | [
-        registry: RawTransactionArgument<string>,
-        seriesId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function seriesDefaultMarketId(options: SeriesDefaultMarketIdOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "seriesId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'series_default_market_id',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface SeriesListedArguments {
-    registry: RawTransactionArgument<string>;
-    seriesId: RawTransactionArgument<number | bigint>;
-}
-export interface SeriesListedOptions {
-    package?: string;
-    arguments: SeriesListedArguments | [
-        registry: RawTransactionArgument<string>,
-        seriesId: RawTransactionArgument<number | bigint>
-    ];
-}
-export function seriesListed(options: SeriesListedOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    const argumentsTypes = [
-        null,
-        'u64'
-    ] satisfies (string | null)[];
-    const parameterNames = ["registry", "seriesId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'series_listed',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface MarketExpiryArguments {
-    registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
-}
-export interface MarketExpiryOptions {
-    package?: string;
-    arguments: MarketExpiryArguments | [
-        registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
-    ];
-}
-export function marketExpiry(options: MarketExpiryOptions) {
+export function market(options: MarketOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-registry';
     const argumentsTypes = [
         null,
         '0x2::object::ID'
     ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
+    const parameterNames = ["registry", "id"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
-        function: 'market_expiry',
+        function: 'market',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
-export interface MarketListedArguments {
+export interface ProgramArguments {
     registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
+    id: RawTransactionArgument<string>;
 }
-export interface MarketListedOptions {
+export interface ProgramOptions {
     package?: string;
-    arguments: MarketListedArguments | [
+    arguments: ProgramArguments | [
         registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
+        id: RawTransactionArgument<string>
     ];
 }
-export function marketListed(options: MarketListedOptions) {
+export function program(options: ProgramOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-registry';
     const argumentsTypes = [
         null,
         '0x2::object::ID'
     ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
+    const parameterNames = ["registry", "id"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
-        function: 'market_listed',
+        function: 'program',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
-export interface MarketDisplayRankArguments {
+export interface SourceArguments {
     registry: RawTransactionArgument<string>;
-    marketId: RawTransactionArgument<string>;
+    id: RawTransactionArgument<string>;
 }
-export interface MarketDisplayRankOptions {
+export interface SourceOptions {
     package?: string;
-    arguments: MarketDisplayRankArguments | [
+    arguments: SourceArguments | [
         registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
+        id: RawTransactionArgument<string>
     ];
 }
-export function marketDisplayRank(options: MarketDisplayRankOptions) {
+export function source(options: SourceOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-registry';
     const argumentsTypes = [
         null,
         '0x2::object::ID'
     ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
+    const parameterNames = ["registry", "id"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
-        function: 'market_display_rank',
+        function: 'source',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
-export interface MarketRecordArguments {
+export interface MarketSourceArguments {
     registry: RawTransactionArgument<string>;
     marketId: RawTransactionArgument<string>;
+    sourceId: RawTransactionArgument<string>;
 }
-export interface MarketRecordOptions {
+export interface MarketSourceOptions {
     package?: string;
-    arguments: MarketRecordArguments | [
+    arguments: MarketSourceArguments | [
         registry: RawTransactionArgument<string>,
-        marketId: RawTransactionArgument<string>
+        marketId: RawTransactionArgument<string>,
+        sourceId: RawTransactionArgument<string>
     ];
 }
-export function marketRecord(options: MarketRecordOptions) {
+export function marketSource(options: MarketSourceOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-registry';
     const argumentsTypes = [
         null,
+        '0x2::object::ID',
         '0x2::object::ID'
     ] satisfies (string | null)[];
-    const parameterNames = ["registry", "marketId"];
+    const parameterNames = ["registry", "marketId", "sourceId"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
-        function: 'market_record',
+        function: 'market_source',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
-export interface MarketRecordAtArguments {
+export interface TableIdsArguments {
     registry: RawTransactionArgument<string>;
-    index: RawTransactionArgument<number | bigint>;
 }
-export interface MarketRecordAtOptions {
+export interface TableIdsOptions {
     package?: string;
-    arguments: MarketRecordAtArguments | [
-        registry: RawTransactionArgument<string>,
-        index: RawTransactionArgument<number | bigint>
+    arguments: TableIdsArguments | [
+        registry: RawTransactionArgument<string>
     ];
 }
-export function marketRecordAt(options: MarketRecordAtOptions) {
+export function tableIds(options: TableIdsOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-registry';
     const argumentsTypes = [
-        null,
-        'u64'
+        null
     ] satisfies (string | null)[];
-    const parameterNames = ["registry", "index"];
+    const parameterNames = ["registry"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'market_registry',
-        function: 'market_record_at',
+        function: 'table_ids',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface NoneIdOptions {
-    package?: string;
-    arguments?: [
-    ];
-}
-export function noneId(options: NoneIdOptions = {}) {
-    const packageAddress = options.package ?? 'jitter/jitter-registry';
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'market_registry',
-        function: 'none_id',
     });
 }

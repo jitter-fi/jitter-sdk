@@ -5,7 +5,7 @@
     "": {
       "name": "@jitter/sdk",
       "dependencies": {
-        "@mysten/sui": "^2.14.1",
+        "@mysten/sui": "^2.23.1",
       },
       "devDependencies": {
         "@mysten/codegen": "^0.8.5",

@@ -9,6 +9,24 @@ import {
 import type { JitterPositionFields } from "../types.js";
 
 describe("JitterAccountService", () => {
+  test("does not misreport an address balance outage as an empty wallet", async () => {
+    const chainReader = new InMemoryJitterChainReader();
+    chainReader.getCoinBalance = async () => { throw new Error("Balance service unavailable"); };
+    await expect(createJitterAccountService({ config: makeTestMarketConfig(), chainReader }).getPortfolio("0xowner")).rejects.toThrow("Balance service unavailable");
+  });
+  test("includes standalone PT coins and address balances separately from position PT", async () => {
+    const config = makeTestMarketConfig();
+    const owner = "0xowner";
+    const chainReader = new InMemoryJitterChainReader({
+      ownedObjects: new Map([[`${owner}:0x2::coin::Coin<${config.ptTypeTag}>`,
+        [{ id: { id: "0xpt" }, balance: "3" }]]]),
+      coinBalances: new Map([[`${owner}:${config.ptTypeTag}`, 9n]]),
+    });
+    const portfolio = await createJitterAccountService({ config, chainReader }).getPortfolio(owner);
+    expect(portfolio.ptCoins).toEqual([{ objectId: "0xpt", balance: 3n }]);
+    expect(portfolio.totalPtBalance).toBe(9n);
+    expect(portfolio.pyPositions).toEqual([]);
+  });
   test("normalizes unified positions and sums underlying and SY coin balances", async () => {
     const owner = "0xowner";
     const config = {
@@ -188,8 +206,10 @@ describe("JitterAccountService", () => {
 
   test("returns user transaction history from analytics reader or unavailable fallback", async () => {
     const config = makeTestMarketConfig();
+    let requestedMarketId = "";
     const analyticsReader: Pick<JitterAnalyticsReader, "getMarketActivity"> = {
       async getMarketActivity(query) {
+        requestedMarketId = query.marketId;
         return {
           marketId: query.marketId,
           source: "indexer",
@@ -228,6 +248,7 @@ describe("JitterAccountService", () => {
       source: "indexer",
       items: [{ actor: "0xowner", action: "swap_sy_for_pt" }],
     });
+    expect(requestedMarketId).toBe(config.marketObjectId);
     await expect(unavailable.getTransactionHistory("0xowner")).resolves.toMatchObject({
       source: "unavailable",
       items: [],

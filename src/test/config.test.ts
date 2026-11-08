@@ -63,6 +63,24 @@ describe("SDK-maintained market configs", () => {
     expect(config.marketObjectId).toMatch(OBJECT_ID_RE);
   });
 
+  test("keeps point trading quote assets separate from coin rewards", () => {
+    const config = getDefaultJitterMarketConfig("testnet");
+    const tokenizedPoint = config?.liquidlink?.tokenizedPoint;
+    const coinReward = config?.coinReward;
+
+    if (!tokenizedPoint || !coinReward) {
+      throw new Error("Missing testnet point-trading or coin-reward config");
+    }
+    expect(tokenizedPoint.quoteTokenTypeTag).toContain(
+      "::mock_usdc::MOCK_USDC",
+    );
+    expect(tokenizedPoint.quoteSymbol).toBe("MOCK_USDC");
+    expect(tokenizedPoint.quoteTokenTypeTag).not.toBe(
+      coinReward.rewardCoinTypeTag,
+    );
+    expect(coinReward.rewardCoinTypeTag).toContain("::qa_reward::QA_REWARD");
+  });
+
   test("getDemoMarketConfig falls back to the SDK registry", () => {
     const defaultConfig = getDefaultJitterMarketConfig("testnet");
 
@@ -77,9 +95,8 @@ describe("SDK-maintained market configs", () => {
     expect(getDemoMarketConfig("testnet").jitterOriginalPackageId).toMatch(
       OBJECT_ID_RE,
     );
-    expect(getDemoMarketConfig("testnet").jitterOriginalPackageId).not.toBe(
-      getDemoMarketConfig("testnet").jitterPackageId,
-    );
+    // A fresh publish has the same original and current package IDs. They only
+    // diverge after the first compatible package upgrade.
   });
 
   test("does not expose the incompatible beta mainnet deployment", () => {

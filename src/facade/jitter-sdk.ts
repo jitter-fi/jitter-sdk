@@ -31,18 +31,21 @@ import {
   type JitterTransactionService,
 } from "../services/transaction-service.js";
 import type { JitterMarketConfig } from "../types.js";
+import {
+  createJitterPointService,
+  type JitterPointService,
+} from "../services/point-service.js";
 
 export type CreateJitterSdkOptions = {
   network: GrpcNetworkKind;
   configProvider?: JitterMarketConfigProvider;
   chainReader?: JitterChainReader;
   analyticsReader?: JitterAnalyticsReader;
-  getUnderlyingApy?: (
+  getUnderlyingPriceUsd?: (
     config: JitterMarketConfig,
-  ) => number | Promise<number>;
-  resolveSyIndex?: (
-    config: JitterMarketConfig,
-  ) => bigint | Promise<bigint>;
+  ) => number | null | Promise<number | null>;
+  getUnderlyingApy?: (config: JitterMarketConfig) => number | Promise<number>;
+  resolveSyIndex?: (config: JitterMarketConfig) => bigint | Promise<bigint>;
 };
 
 export type JitterMarketSdk = {
@@ -52,6 +55,7 @@ export type JitterMarketSdk = {
   quotes: JitterQuoteService;
   trades: JitterTradeService;
   transactions: JitterTransactionService;
+  points: JitterPointService;
 };
 
 export type JitterSdk = {
@@ -71,6 +75,8 @@ export function createJitterSdk(options: CreateJitterSdkOptions): JitterSdk {
     chainReader,
     analyticsReader: options.analyticsReader,
     getUnderlyingApy: options.getUnderlyingApy,
+    getUnderlyingPriceUsd: options.getUnderlyingPriceUsd,
+    resolveSyIndex: options.resolveSyIndex,
   });
 
   return {
@@ -96,6 +102,8 @@ export function createJitterSdk(options: CreateJitterSdkOptions): JitterSdk {
       });
       const transactions = createJitterTransactionService({
         config,
+        network: options.network,
+        depositDustToTreasury: options.network === "mainnet",
         adapter,
         resolveSyIndex: options.resolveSyIndex
           ? () => options.resolveSyIndex?.(config) ?? 0n
@@ -103,6 +111,7 @@ export function createJitterSdk(options: CreateJitterSdkOptions): JitterSdk {
       });
       return {
         adapter,
+        points: createJitterPointService({ config, network: options.network }),
         orderbooks,
         accounts: createJitterAccountService({
           config,

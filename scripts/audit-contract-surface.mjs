@@ -12,7 +12,7 @@ const contractRoot = process.env.JITTER_CONTRACT_ROOT
 
 const objectStructNames = {
   CoinAuthority: "CoinAuthority",
-  MarketState: "MarketState",
+  Market: "Market",
   SettlementState: "SettlementState",
   RiskConfig: "RiskConfig",
   PyIndexGuard: "PyIndexGuard",

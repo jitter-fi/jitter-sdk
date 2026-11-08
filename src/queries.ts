@@ -11,6 +11,10 @@ import {
   type GrpcNetworkKind,
 } from "./rpc.js";
 import { FP64_ONE } from "./constants.js";
+import { reviewedAdapterOriginalPackageId } from "./lp-deployment.js";
+import { bcs } from "@mysten/sui/bcs";
+import { deriveDynamicFieldID, normalizeSuiAddress } from "@mysten/sui/utils";
+import { addLinearRate, linearGroupAccrued } from "./linear-score.js";
 import type {
   DemoMarketVaultFields,
   JitterPositionFields,
@@ -32,7 +36,7 @@ export type PoolCreatedEvent = {
   expiry: string;
 };
 
-export type MarketCreatedEvent = {
+export type LegacyMarketCreatedEvent = {
   market_id: string;
   expiry: string;
   created_by: string;
@@ -47,7 +51,7 @@ export type PyStateCreatedEvent = {
   expiry: string;
 };
 
-export type MarketStateCreatedEvent = {
+export type MarketCreatedEvent = {
   market_state_id: string;
   expiry: string;
   created_by: string;
@@ -159,14 +163,14 @@ export type TreasuryInterestCollectedEvent = {
   collected_by: string;
 };
 
-export type MarketStateReserveFeeCollectedEvent = {
+export type MarketReserveFeeCollectedEvent = {
   market_state_id: string;
   treasury: string;
   amount: string;
   collector: string;
 };
 
-export type MarketStateTreasuryInterestCollectedEvent = {
+export type MarketTreasuryInterestCollectedEvent = {
   market_state_id: string;
   treasury: string;
   amount: string;
@@ -213,11 +217,11 @@ export async function querySwapEventsForConfig(
   limit: number,
 ): Promise<Array<SwapEvent & { timestampMs: number; digest: string; sender: string }>> {
   const legacyBeta = isLegacyBetaSplitStateConfig(config);
-  const marketStateObjectId = legacyBeta ? null : resolveMarketStateObjectId(config);
+  const marketStateObjectId = legacyBeta ? null : resolveMarketObjectId(config);
   const batches = await Promise.all(
     getJitterEventPackageIds(config).map((packageId) =>
       marketStateObjectId
-        ? queryMarketStateSwapEvents(
+        ? queryMarketSwapEvents(
             network,
             packageId,
             marketStateObjectId,
@@ -265,11 +269,11 @@ async function queryAddLiquidityEventsForConfig(
   limit: number,
 ): Promise<Array<AddLiquidityEvent & { timestampMs: number; digest: string; sender: string }>> {
   const legacyBeta = isLegacyBetaSplitStateConfig(config);
-  const marketStateObjectId = legacyBeta ? null : resolveMarketStateObjectId(config);
+  const marketStateObjectId = legacyBeta ? null : resolveMarketObjectId(config);
   const batches = await Promise.all(
     getJitterEventPackageIds(config).map((packageId) =>
       marketStateObjectId
-        ? queryMarketStateAddLiquidityEvents(
+        ? queryMarketAddLiquidityEvents(
             network,
             packageId,
             marketStateObjectId,
@@ -289,11 +293,11 @@ async function queryRemoveLiquidityEventsForConfig(
   Array<RemoveLiquidityEvent & { timestampMs: number; digest: string; sender: string }>
 > {
   const legacyBeta = isLegacyBetaSplitStateConfig(config);
-  const marketStateObjectId = legacyBeta ? null : resolveMarketStateObjectId(config);
+  const marketStateObjectId = legacyBeta ? null : resolveMarketObjectId(config);
   const batches = await Promise.all(
     getJitterEventPackageIds(config).map((packageId) =>
       marketStateObjectId
-        ? queryMarketStateRemoveLiquidityEvents(
+        ? queryMarketRemoveLiquidityEvents(
             network,
             packageId,
             marketStateObjectId,
@@ -311,11 +315,11 @@ async function queryImpliedRateEventsForConfig(
   limit: number,
 ): Promise<Array<ImpliedRateUpdatedEvent & { timestampMs: number; digest: string }>> {
   const legacyBeta = isLegacyBetaSplitStateConfig(config);
-  const marketStateObjectId = legacyBeta ? null : resolveMarketStateObjectId(config);
+  const marketStateObjectId = legacyBeta ? null : resolveMarketObjectId(config);
   const batches = await Promise.all(
     getJitterEventPackageIds(config).map((packageId) =>
       marketStateObjectId
-        ? queryMarketStateImpliedRateEvents(
+        ? queryMarketImpliedRateEvents(
             network,
             packageId,
             marketStateObjectId,
@@ -397,7 +401,7 @@ export type MarketVaultCreatedEvent = {
 async function getObject<T>(network: GrpcNetworkKind, objectId: string): Promise<T> {
   const response = await grpcRequest<{
     data: { content: { fields: T } };
-  }>(network, "sui_getObject", [objectId, { showContent: true }]);
+  }>(network, "getObject", [objectId, { showContent: true }]);
   return response.data.content.fields;
 }
 
@@ -511,10 +515,10 @@ function readBalanceField(value: unknown): string {
 }
 
 function isLegacyBetaSplitStateConfig(config: JitterMarketConfig): boolean {
-  return !resolveMarketStateObjectId(config);
+  return !resolveMarketObjectId(config);
 }
 
-function resolveMarketStateObjectId(config: JitterMarketConfig): string | null {
+function resolveMarketObjectId(config: JitterMarketConfig): string | null {
   if (config.marketStateObjectId) return config.marketStateObjectId;
   const ids = [
     config.marketObjectId,
@@ -524,7 +528,7 @@ function resolveMarketStateObjectId(config: JitterMarketConfig): string | null {
   return ids.every((id) => id === ids[0]) ? config.marketObjectId : null;
 }
 
-function normalizeMarketStateAsPoolFields(
+function normalizeMarketAsPoolFields(
   fields: Record<string, unknown>,
   objectId: string,
 ): PoolFields {
@@ -544,11 +548,12 @@ function normalizeMarketStateAsPoolFields(
   };
 }
 
-function normalizeMarketStateAsPyStateFields(
+function normalizeMarketAsPyStateFields(
   fields: Record<string, unknown>,
   objectId: string,
 ): PyStateFields {
   const settlement = readRawField(fields.settlement);
+  const segment = readRawField(fields.interest_segment);
   return {
     id: normalizeMoveObjectId(fields.id as string | { id?: string } | undefined, objectId),
     pt_supply: readStringField(fields.pt_supply),
@@ -564,6 +569,14 @@ function normalizeMarketStateAsPyStateFields(
     market_id: objectId,
     total_treasury_interest: readStringField(fields.total_treasury_interest),
     last_collect_interest_index: readStringField(fields.last_collect_interest_index),
+    interest_segment: fields.interest_segment ? {
+      start_index: readStringField(segment.start_index),
+      supply: readStringField(segment.supply),
+      user_accounted: readStringField(segment.user_accounted),
+      fee_accounted: readStringField(segment.fee_accounted),
+      index_accounted: readStringField(segment.index_accounted),
+      terminal_dust: readStringField(segment.terminal_dust),
+    } : undefined,
     reserve_fee_balance: readBalanceField(fields.reserve_fee_vault),
   };
 }
@@ -611,7 +624,7 @@ function hasScallopMarketConfig(config: JitterMarketConfig): boolean {
   );
 }
 
-function resolveLiquidlinkScoreboardObjectId(config: JitterMarketConfig): string | null {
+export function resolveLiquidlinkScoreboardObjectId(config: JitterMarketConfig): string | null {
   const liquidlink = config.liquidlink;
   const enabled =
     liquidlink?.enabled ?? Boolean(liquidlink?.scoreboardObjectId || config.liquidlinkScoreboardObjectId);
@@ -671,20 +684,26 @@ function calculateLiquidlinkTotalScore(
   return storedScore + (scorePerDuration * (elapsed - pausedDelta)) / durationMs;
 }
 
-function readLiquidlinkScoreInfo(
+/** @internal Shared by scoreboard and leaderboard reads. */
+export async function readLiquidlinkScoreInfo(
   scoreInfo: Record<string, unknown>,
   nowMs: bigint,
   currentLinearPausedMs: bigint,
-): LiquidlinkScoreInfo {
+  network: GrpcNetworkKind,
+  scoreboardId: string,
+  getCutoffs: () => ReturnType<typeof readLinearPolicyCutoffs> = () => readLinearPolicyCutoffs(network, scoreboardId),
+): Promise<LiquidlinkScoreInfo> {
+  const rawScore = readRequiredStringField(scoreInfo.score, "scoreboard.score");
+  if (!/^\d+$/.test(rawScore)) throw new Error("Invalid on-chain scoreboard.score.");
   const storedScore = readOptionalBigIntField(scoreInfo.score);
-  const scorePerDuration = readOptionalBigIntField(scoreInfo.score_per_duration);
-  const durationMs = readOptionalBigIntField(scoreInfo.duration);
+  let scorePerDuration = readOptionalBigIntField(scoreInfo.score_per_duration);
+  let durationMs = readOptionalBigIntField(scoreInfo.duration);
   const updatedAtMs = readOptionalBigIntField(scoreInfo.updated_at);
   const linearPausedMsAtUpdate = readOptionalBigIntField(
     scoreInfo.linear_paused_ms_at_update,
   );
   const convertedScore = readLiquidlinkScoreDebtField(scoreInfo);
-  const totalScore = calculateLiquidlinkTotalScore(
+  let totalScore = calculateLiquidlinkTotalScore(
     storedScore,
     scorePerDuration,
     durationMs,
@@ -693,7 +712,56 @@ function readLiquidlinkScoreInfo(
     linearPausedMsAtUpdate,
     currentLinearPausedMs,
   );
+  const groups = Array.isArray(scoreInfo.linear_groups) ? scoreInfo.linear_groups : [];
+  if (groups.length > 0) {
+    totalScore = storedScore;
+    let displayRate = { rate: 0n, duration: 1n };
+    const cutoffs = groups.some((raw) => {
+      const policies = readRawField(raw).policies;
+      return Array.isArray(policies) && policies.length > 0;
+    }) ? await getCutoffs() : [];
+    for (const raw of groups) {
+      const group = readRawField(raw);
+      let effectiveNow = nowMs;
+      let effectivePaused = currentLinearPausedMs;
+      const policies = Array.isArray(group.policies) ? group.policies : [];
+      let ended = false;
+      for (const rawPolicy of policies) {
+        const dependency = readRawField(rawPolicy);
+        const match = cutoffs.find(({ key }) =>
+          readStringField(key.project_object_id) === readStringField(group.project_object_id)
+          && readStringField(readRawField(key.policy).name) === readStringField(readRawField(dependency.policy).name)
+          && readStringField(key.policy_state_id) === readStringField(dependency.policy_state_id)
+          && readOptionalBigIntField(key.generation) === readOptionalBigIntField(dependency.generation));
+        if (!match) continue;
+        const cutoff = match.value;
+        const cutoffMs = readOptionalBigIntField(cutoff.cutoff_ms);
+        if (!ended || cutoffMs < effectiveNow) {
+          effectiveNow = cutoffMs;
+          effectivePaused = readOptionalBigIntField(cutoff.paused_ms_at_cutoff);
+          ended = true;
+        }
+      }
+      totalScore += linearGroupAccrued({
+        rate: readOptionalBigIntField(group.score_per_duration),
+        duration: readOptionalBigIntField(group.duration),
+        updatedAt: readOptionalBigIntField(group.updated_at),
+        pausedAtUpdate: readOptionalBigIntField(group.linear_paused_ms_at_update),
+        remainder: readOptionalBigIntField(group.remainder),
+      }, effectiveNow, effectivePaused);
+      if (!ended) displayRate = addLinearRate(displayRate, {
+        rate: readOptionalBigIntField(group.score_per_duration),
+        duration: readOptionalBigIntField(group.duration),
+      });
+    }
+    scorePerDuration = displayRate.rate;
+    durationMs = displayRate.duration;
+  }
 
+  if ([storedScore, scorePerDuration, durationMs, updatedAtMs, convertedScore,
+    linearPausedMsAtUpdate, totalScore].some((value) => value < 0n)) {
+    throw new Error("Invalid negative on-chain scoreboard score.");
+  }
   return {
     exists: true,
     totalScore,
@@ -705,6 +773,34 @@ function readLiquidlinkScoreInfo(
     updatedAtMs,
     linearPausedMsAtUpdate,
   };
+}
+
+async function readLinearPolicyCutoffs(network: GrpcNetworkKind, scoreboardId: string) {
+  const client = getSuiGrpcClient(network);
+  const cutoffs: Array<{ key: Record<string, unknown>; value: Record<string, unknown> }> = [];
+  let cursor: string | null | undefined;
+  const seen = new Set<string>();
+  let scanned = 0;
+  let pages = 0;
+  do {
+    const page = await client.listDynamicFields({ parentId: scoreboardId, cursor, limit: 50 });
+    if (!Array.isArray(page.dynamicFields) || typeof page.hasNextPage !== "boolean") throw new Error("Invalid linear cutoff pagination page.");
+    scanned += page.dynamicFields.length;
+    if (scanned > 1000 || ++pages > 1000) throw new Error("Linear cutoff scan limit (1000) exceeded.");
+    for (const field of page.dynamicFields) {
+      if (!field.name.type.endsWith("::scoreboard::PolicyCutoffKey")) continue;
+      const response = await client.getObject({ objectId: field.fieldId, include: { json: true } });
+      const fields = readRawField(response.object.json);
+      cutoffs.push({ key: readRawField(fields.name), value: readRawField(fields.value) });
+    }
+    if (page.hasNextPage) {
+      if (!page.cursor || seen.has(page.cursor)) throw new Error("Stalled linear cutoff pagination cursor.");
+      if (scanned >= 1000) throw new Error("Linear cutoff scan limit (1000) exceeded.");
+      seen.add(page.cursor);
+    }
+    cursor = page.hasNextPage ? page.cursor : null;
+  } while (cursor);
+  return cutoffs;
 }
 
 function readDynamicFieldAddressName(value: unknown): string {
@@ -738,29 +834,23 @@ export async function getLiquidlinkScoreInfo(
   const scores = readRawField(scoreboard.scores);
   const scoresTableId = readRequiredStringField(scores.id, "scoreboard.scores.id");
   const currentPausedMs = currentLiquidlinkLinearPausedMs(scoreboard, nowMs);
-  const client = getSuiClient(network);
-  const dynamicField = await client.getDynamicFieldObject({
-    parentId: scoresTableId,
-    name: {
-      type: "address",
-      value: owner,
-    },
-  });
-
-  if ("error" in dynamicField && dynamicField.error) {
-    return emptyLiquidlinkScoreInfo();
+  const client = getSuiGrpcClient(network);
+  const fieldId = deriveDynamicFieldID(scoresTableId, "address", bcs.Address.serialize(owner).toBytes());
+  try {
+    // Core getDynamicField/getObjects currently erase structured per-object status codes.
+    const lookup = await client.ledgerService.getObject({ objectId: fieldId, readMask: { paths: ["object_id"] } });
+    if (lookup.response.object?.objectId !== fieldId) throw new Error("Invalid on-chain reward score lookup.");
+  } catch (error) {
+    // Only confirmed absence of the address-keyed field is a valid zero balance.
+    const code = error && typeof error === "object" && "code" in error ? error.code : null;
+    if (code === "NOT_FOUND") return emptyLiquidlinkScoreInfo();
+    throw error;
   }
-
-  const data = "data" in dynamicField ? dynamicField.data : undefined;
-  const content = data?.content;
-  if (!content || content.dataType !== "moveObject") {
-    return emptyLiquidlinkScoreInfo();
-  }
-
-  const fields = readRawField(content.fields);
+  const response = await client.getObject({ objectId: fieldId, include: { json: true } });
+  const fields = readRawField(response.object.json);
   const value = readRawField(fields.value);
   const scoreInfo = Object.keys(value).length > 0 ? value : fields;
-  return readLiquidlinkScoreInfo(scoreInfo, nowMs, currentPausedMs);
+  return readLiquidlinkScoreInfo(scoreInfo, nowMs, currentPausedMs, network, scoreboardObjectId);
 }
 
 export async function getLiquidlinkLeaderboard(
@@ -782,43 +872,63 @@ export async function getLiquidlinkLeaderboard(
   const client = getSuiGrpcClient(network);
   const entries: Array<Omit<LiquidlinkLeaderboardEntry, "rank">> = [];
   let cursor: string | null | undefined;
+  const seenCursors = new Set<string>();
+  const seenOwners = new Set<string>();
+  let scanned = 0;
+  let pages = 0;
+  let cutoffs: ReturnType<typeof readLinearPolicyCutoffs> | undefined;
+  const getCutoffs = () => cutoffs ??= readLinearPolicyCutoffs(network, scoreboardObjectId);
 
   do {
     const page = await client.listDynamicFields({
       parentId: scoresTableId,
       cursor,
-      limit: Math.min(Math.max(limit, 1), 50),
+      limit: 50,
     });
-
-    for (const field of page.dynamicFields ?? []) {
-      const fieldId = field.fieldId;
-      if (!fieldId) continue;
-
-      const response = await client.getObject({
-        objectId: fieldId,
-        include: { json: true },
-      });
-      const dynamicField = readRawField(response.object?.json);
+    if (!Array.isArray(page.dynamicFields) || typeof page.hasNextPage !== "boolean") throw new Error("Invalid leaderboard pagination page.");
+    scanned += page.dynamicFields.length;
+    if (scanned > 1000 || ++pages > 1000) throw new Error("Reward leaderboard scan limit (1000) exceeded.");
+    const fieldIds = page.dynamicFields.map((field) => field.fieldId);
+    if (fieldIds.some((id) => !id) || new Set(fieldIds).size !== fieldIds.length) throw new Error("Missing or duplicate leaderboard field ID.");
+    const response = fieldIds.length > 0
+      ? await client.getObjects({ objectIds: fieldIds, include: { json: true } }) : { objects: [] };
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const object of response.objects) {
+      if (object instanceof Error) throw object;
+      if (!fieldIds.includes(object.objectId) || byId.has(object.objectId)) throw new Error("Unexpected leaderboard object ID.");
+      byId.set(object.objectId, readRawField(object.json));
+    }
+    if (byId.size !== fieldIds.length) throw new Error("Incomplete leaderboard object batch.");
+    for (const field of page.dynamicFields) {
+      const dynamicField = byId.get(field.fieldId)!;
       const value = readRawField(dynamicField.value);
       const scoreInfo = Object.keys(value).length > 0 ? value : dynamicField;
       const owner =
         readDynamicFieldAddressName(dynamicField.name) ||
         readDynamicFieldAddressName(field.name);
-      if (!owner) continue;
+      if (!/^0x[0-9a-fA-F]{1,64}$/.test(owner)) throw new Error("Invalid leaderboard owner address.");
+      const normalizedOwner = normalizeSuiAddress(owner);
+      if (seenOwners.has(normalizedOwner)) throw new Error("Duplicate leaderboard owner.");
+      seenOwners.add(normalizedOwner);
 
       entries.push({
-        owner,
-        ...readLiquidlinkScoreInfo(scoreInfo, nowMs, currentPausedMs),
+        owner: normalizedOwner,
+        ...await readLiquidlinkScoreInfo(scoreInfo, nowMs, currentPausedMs, network, scoreboardObjectId, getCutoffs),
       });
     }
 
-    cursor = page.hasNextPage && entries.length < limit ? page.cursor : null;
+    if (page.hasNextPage) {
+      if (!page.cursor || seenCursors.has(page.cursor)) throw new Error("Stalled leaderboard pagination cursor.");
+      if (scanned >= 1000) throw new Error("Reward leaderboard scan limit (1000) exceeded.");
+      seenCursors.add(page.cursor);
+    }
+    cursor = page.hasNextPage ? page.cursor : null;
   } while (cursor);
 
   return entries
     .sort((a, b) => {
-      if (a.totalScore === b.totalScore) return a.owner.localeCompare(b.owner);
-      return a.totalScore > b.totalScore ? -1 : 1;
+      if (a.unconvertedScore === b.unconvertedScore) return a.owner.localeCompare(b.owner);
+      return a.unconvertedScore > b.unconvertedScore ? -1 : 1;
     })
     .slice(0, limit)
     .map((entry, index) => ({ ...entry, rank: index + 1 }));
@@ -832,6 +942,7 @@ async function findScallopTableValue(
   const client = getSuiGrpcClient(network);
   const expectedTypeName = normalizeScallopTypeName(typeTag);
   let cursor: string | null | undefined;
+  const seenCursors = new Set<string>();
 
   do {
     const page = await client.listDynamicFields({
@@ -840,16 +951,24 @@ async function findScallopTableValue(
       limit: 50,
     });
 
-    for (const field of page.dynamicFields ?? []) {
-      const fieldId = field.fieldId;
-      if (!fieldId) continue;
-
-      const response = await client.getObject({
-        objectId: fieldId,
-        include: { json: true },
-      });
-      const json = response.object?.json;
-      const fields = readRawField(json);
+    if (!Array.isArray(page.dynamicFields) || typeof page.hasNextPage !== "boolean")
+      throw new Error("Invalid Scallop table pagination page.");
+    const fieldIds = page.dynamicFields.map(field => field.fieldId);
+    if (fieldIds.some(id => !id) || new Set(fieldIds).size !== fieldIds.length)
+      throw new Error("Missing or duplicate Scallop table field ID.");
+    const response = fieldIds.length
+      ? await client.getObjects({ objectIds: fieldIds, include: { json: true } })
+      : { objects: [] };
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const object of response.objects) {
+      if (object instanceof Error) throw object;
+      if (!fieldIds.includes(object.objectId) || byId.has(object.objectId))
+        throw new Error("Unexpected or duplicate Scallop table object ID.");
+      byId.set(object.objectId, readRawField(object.json));
+    }
+    if (byId.size !== fieldIds.length) throw new Error("Incomplete Scallop table object batch.");
+    for (const field of page.dynamicFields) {
+      const fields = byId.get(field.fieldId)!;
       const fieldTypeName = normalizeScallopTypeName(readStringField(fields.name));
       if (fieldTypeName !== expectedTypeName) continue;
 
@@ -857,6 +976,11 @@ async function findScallopTableValue(
       return Object.keys(value).length > 0 ? value : null;
     }
 
+    if (page.hasNextPage) {
+      if (!page.cursor || seenCursors.has(page.cursor))
+        throw new Error("Stalled Scallop table pagination cursor.");
+      seenCursors.add(page.cursor);
+    }
     cursor = page.hasNextPage ? page.cursor : null;
   } while (cursor);
 
@@ -921,10 +1045,10 @@ export async function getUserPyPositions(
   owner: string,
   config: JitterMarketConfig,
 ): Promise<PyPositionFields[]> {
-  const marketStateObjectId = resolveMarketStateObjectId(config) ?? config.pyStateObjectId;
+  const marketStateObjectId = resolveMarketObjectId(config) ?? config.pyStateObjectId;
   const response = await grpcRequest<{
     data: Array<{ data: { objectId: string; content: { fields: JitterPositionFields } } }>;
-  }>(network, "suix_getOwnedObjects", [
+  }>(network, "listOwnedObjects", [
     owner,
     {
       filter: { StructType: getJitterPositionStructType(config) },
@@ -948,7 +1072,7 @@ export async function getUserLpPositions(
 ): Promise<LpPositionFields[]> {
   const response = await grpcRequest<{
     data: Array<{ data: { objectId: string; content: { fields: JitterPositionFields } } }>;
-  }>(network, "suix_getOwnedObjects", [
+  }>(network, "listOwnedObjects", [
     owner,
     {
       filter: { StructType: getJitterPositionStructType(config) },
@@ -980,7 +1104,7 @@ export async function getUserCoins(
 ): Promise<Array<{ objectId: string; balance: bigint }>> {
   const response = await grpcRequest<{
     data: Array<{ data: { objectId: string; content: { fields: { balance: string } } } }>;
-  }>(network, "suix_getOwnedObjects", [
+  }>(network, "listOwnedObjects", [
     owner,
     {
       filter: { StructType: `0x2::coin::Coin<${coinTypeTag}>` },
@@ -1003,7 +1127,7 @@ export async function getUserSyCoins(
 ): Promise<Array<{ objectId: string; balance: bigint }>> {
   const response = await grpcRequest<{
     data: Array<{ data: { objectId: string; content: { fields: { balance: string } } } }>;
-  }>(network, "suix_getOwnedObjects", [
+  }>(network, "listOwnedObjects", [
     owner,
     {
       filter: { StructType: `0x2::coin::Coin<${config.syTypeTag}>` },
@@ -1085,9 +1209,9 @@ export async function getPoolState(
   network: GrpcNetworkKind,
   config: JitterMarketConfig,
 ): Promise<PoolFields> {
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
   if (marketStateObjectId) {
-    return normalizeMarketStateAsPoolFields(
+    return normalizeMarketAsPoolFields(
       await getObject<Record<string, unknown>>(network, marketStateObjectId),
       marketStateObjectId,
     );
@@ -1100,9 +1224,9 @@ export async function getPyState(
   network: GrpcNetworkKind,
   config: JitterMarketConfig,
 ): Promise<PyStateFields> {
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
   if (marketStateObjectId) {
-    return normalizeMarketStateAsPyStateFields(
+    return normalizeMarketAsPyStateFields(
       await getObject<Record<string, unknown>>(network, marketStateObjectId),
       marketStateObjectId,
     );
@@ -1180,7 +1304,7 @@ export function fp64RawToNumber(raw: MoveNumericField): number {
  * @deprecated Beta split-state compatibility only.
  *
  * New markets are discovered through `jitter_registry` and use
- * `market_state::MarketStateCreatedEvent`, not `pool::PoolCreatedEvent`.
+ * `market::MarketCreatedEvent`, not `pool::PoolCreatedEvent`.
  */
 export async function queryPoolCreatedEvents(
   network: GrpcNetworkKind,
@@ -1199,7 +1323,7 @@ export async function queryPoolCreatedEvents(
 /**
  * @deprecated Beta split-state compatibility only.
  *
- * New markets use unified `MarketState` objects and do not emit
+ * New markets use unified `Market` objects and do not emit
  * `py_state::PyStateCreatedEvent`.
  */
 export async function queryPyStateCreatedEvents(
@@ -1217,34 +1341,34 @@ export async function queryPyStateCreatedEvents(
 }
 
 /**
- * Discover unified MarketState objects created by the current core package.
+ * Discover unified Market objects created by the current core package.
  *
  * This is the canonical discovery event for the refactored core. Frontends and
  * indexers should still prefer `jitter_registry` when a registry is deployed,
  * but this is useful for package-level audits, admin recovery, and bootstrap
  * tooling.
  */
-export async function queryMarketStateCreatedEvents(
+export async function queryMarketCreatedEvents(
   network: GrpcNetworkKind,
   jitterPackageId: string,
   limit = 50,
-): Promise<MarketStateCreatedEvent[]> {
+): Promise<MarketCreatedEvent[]> {
   const client = getSuiClient(network);
   const result = await client.queryEvents({
     query: {
-      MoveEventType: `${jitterPackageId}::market_state::MarketStateCreatedEvent`,
+      MoveEventType: `${jitterPackageId}::market::MarketCreatedEvent`,
     },
     limit,
     order: "descending",
   });
-  return (result.data ?? []).map((e) => e.parsedJson as MarketStateCreatedEvent);
+  return (result.data ?? []).map((e) => e.parsedJson as MarketCreatedEvent);
 }
 
 /**
  * @deprecated Beta split-state compatibility only.
  *
  * Prefer `querySwapEventsForConfig`; unified configs are routed to
- * `market_state::MarketStateSwapEvent`.
+ * `market::MarketSwapEvent`.
  */
 export async function querySwapEvents(
   network: GrpcNetworkKind,
@@ -1269,7 +1393,7 @@ export async function querySwapEvents(
     }));
 }
 
-type MarketStateSwapEvent = {
+type MarketSwapEvent = {
   market_state_id: string;
   is_pt_to_sy: boolean;
   amount_in: string;
@@ -1278,7 +1402,7 @@ type MarketStateSwapEvent = {
   trader: string;
 };
 
-async function queryMarketStateSwapEvents(
+async function queryMarketSwapEvents(
   network: GrpcNetworkKind,
   jitterPackageId: string,
   marketStateId: string,
@@ -1287,7 +1411,7 @@ async function queryMarketStateSwapEvents(
   const client = getSuiClient(network);
   const result = await client.queryEvents({
     query: {
-      MoveEventType: `${jitterPackageId}::market_state::MarketStateSwapEvent`,
+      MoveEventType: `${jitterPackageId}::market::MarketSwapEvent`,
     },
     limit,
     order: "descending",
@@ -1296,11 +1420,11 @@ async function queryMarketStateSwapEvents(
   return (result.data ?? [])
     .filter(
       (e) =>
-        normalizeObjectId((e.parsedJson as MarketStateSwapEvent).market_state_id) ===
+        normalizeObjectId((e.parsedJson as MarketSwapEvent).market_state_id) ===
         normalizeObjectId(marketStateId),
     )
     .map((e) => {
-      const event = e.parsedJson as MarketStateSwapEvent;
+      const event = e.parsedJson as MarketSwapEvent;
       return {
         pool_id: event.market_state_id,
         is_pt_to_sy: event.is_pt_to_sy,
@@ -1372,7 +1496,7 @@ export async function queryRouterSwapYtForSyEvents(
  * @deprecated Beta split-state compatibility only.
  *
  * Prefer `queryAddLiquidityEventsForConfig`; unified configs are routed to
- * `market_state::MarketStateAddLiquidityEvent`.
+ * `market::MarketAddLiquidityEvent`.
  */
 export async function queryAddLiquidityEvents(
   network: GrpcNetworkKind,
@@ -1397,7 +1521,7 @@ export async function queryAddLiquidityEvents(
     }));
 }
 
-type MarketStateAddLiquidityEvent = {
+type MarketAddLiquidityEvent = {
   market_state_id: string;
   position_id: string;
   sy_amount: string;
@@ -1405,7 +1529,7 @@ type MarketStateAddLiquidityEvent = {
   lp_amount: string;
 };
 
-async function queryMarketStateAddLiquidityEvents(
+async function queryMarketAddLiquidityEvents(
   network: GrpcNetworkKind,
   jitterPackageId: string,
   marketStateId: string,
@@ -1414,7 +1538,7 @@ async function queryMarketStateAddLiquidityEvents(
   const client = getSuiClient(network);
   const result = await client.queryEvents({
     query: {
-      MoveEventType: `${jitterPackageId}::market_state::MarketStateAddLiquidityEvent`,
+      MoveEventType: `${jitterPackageId}::market::MarketAddLiquidityEvent`,
     },
     limit,
     order: "descending",
@@ -1424,11 +1548,11 @@ async function queryMarketStateAddLiquidityEvents(
     .filter(
       (e) =>
         normalizeObjectId(
-          (e.parsedJson as MarketStateAddLiquidityEvent).market_state_id,
+          (e.parsedJson as MarketAddLiquidityEvent).market_state_id,
         ) === normalizeObjectId(marketStateId),
     )
     .map((e) => {
-      const event = e.parsedJson as MarketStateAddLiquidityEvent;
+      const event = e.parsedJson as MarketAddLiquidityEvent;
       return {
         pool_id: event.market_state_id,
         position_id: event.position_id,
@@ -1446,7 +1570,7 @@ async function queryMarketStateAddLiquidityEvents(
  * @deprecated Beta split-state compatibility only.
  *
  * Prefer `queryRemoveLiquidityEventsForConfig`; unified configs are routed to
- * `market_state::MarketStateRemoveLiquidityEvent`.
+ * `market::MarketRemoveLiquidityEvent`.
  */
 export async function queryRemoveLiquidityEvents(
   network: GrpcNetworkKind,
@@ -1471,7 +1595,7 @@ export async function queryRemoveLiquidityEvents(
     }));
 }
 
-type MarketStateRemoveLiquidityEvent = {
+type MarketRemoveLiquidityEvent = {
   market_state_id: string;
   position_id: string;
   sy_amount: string;
@@ -1480,7 +1604,7 @@ type MarketStateRemoveLiquidityEvent = {
   provider: string;
 };
 
-async function queryMarketStateRemoveLiquidityEvents(
+async function queryMarketRemoveLiquidityEvents(
   network: GrpcNetworkKind,
   jitterPackageId: string,
   marketStateId: string,
@@ -1489,7 +1613,7 @@ async function queryMarketStateRemoveLiquidityEvents(
   const client = getSuiClient(network);
   const result = await client.queryEvents({
     query: {
-      MoveEventType: `${jitterPackageId}::market_state::MarketStateRemoveLiquidityEvent`,
+      MoveEventType: `${jitterPackageId}::market::MarketRemoveLiquidityEvent`,
     },
     limit,
     order: "descending",
@@ -1499,11 +1623,11 @@ async function queryMarketStateRemoveLiquidityEvents(
     .filter(
       (e) =>
         normalizeObjectId(
-          (e.parsedJson as MarketStateRemoveLiquidityEvent).market_state_id,
+          (e.parsedJson as MarketRemoveLiquidityEvent).market_state_id,
         ) === normalizeObjectId(marketStateId),
     )
     .map((e) => {
-      const event = e.parsedJson as MarketStateRemoveLiquidityEvent;
+      const event = e.parsedJson as MarketRemoveLiquidityEvent;
       return {
         pool_id: event.market_state_id,
         position_id: event.position_id,
@@ -1654,7 +1778,7 @@ export async function getPoolActivity(
  * @deprecated Beta split-state compatibility only.
  *
  * Prefer `queryImpliedRateEventsForConfig`; unified configs are routed to
- * `market_state::MarketStateImpliedRateUpdatedEvent`.
+ * `market::MarketImpliedRateUpdatedEvent`.
  */
 export async function queryImpliedRateEvents(
   network: GrpcNetworkKind,
@@ -1678,7 +1802,7 @@ export async function queryImpliedRateEvents(
     }));
 }
 
-type MarketStateImpliedRateUpdatedEvent = {
+type MarketImpliedRateUpdatedEvent = {
   market_state_id: string;
   ln_implied_rate_raw: string;
   pt_price_raw?: string;
@@ -1687,7 +1811,7 @@ type MarketStateImpliedRateUpdatedEvent = {
   lp_supply: string;
 };
 
-async function queryMarketStateImpliedRateEvents(
+async function queryMarketImpliedRateEvents(
   network: GrpcNetworkKind,
   jitterPackageId: string,
   marketStateId: string,
@@ -1696,7 +1820,7 @@ async function queryMarketStateImpliedRateEvents(
   const client = getSuiClient(network);
   const result = await client.queryEvents({
     query: {
-      MoveEventType: `${jitterPackageId}::market_state::MarketStateImpliedRateUpdatedEvent`,
+      MoveEventType: `${jitterPackageId}::market::MarketImpliedRateUpdatedEvent`,
     },
     limit,
     order: "descending",
@@ -1706,11 +1830,11 @@ async function queryMarketStateImpliedRateEvents(
     .filter(
       (e) =>
         normalizeObjectId(
-          (e.parsedJson as MarketStateImpliedRateUpdatedEvent).market_state_id,
+          (e.parsedJson as MarketImpliedRateUpdatedEvent).market_state_id,
         ) === normalizeObjectId(marketStateId),
     )
     .map((e) => {
-      const event = e.parsedJson as MarketStateImpliedRateUpdatedEvent;
+      const event = e.parsedJson as MarketImpliedRateUpdatedEvent;
       return {
         pool_id: event.market_state_id,
         ln_implied_rate_raw: event.ln_implied_rate_raw,
@@ -1817,8 +1941,8 @@ export async function getPoolVolumeStats(
 /**
  * @deprecated Beta split-state compatibility only.
  *
- * Unified MarketState markets should use `jitter_view::offchain` claimable
- * interest helpers or MarketState-specific events once exposed.
+ * Unified Market markets should use `jitter_view::offchain` claimable
+ * interest helpers or Market-specific events once exposed.
  */
 export async function queryInterestCollectedEvents(
   network: GrpcNetworkKind,
@@ -1845,8 +1969,8 @@ export async function queryInterestCollectedEvents(
 /**
  * @deprecated Beta split-state compatibility only.
  *
- * Unified MarketState markets collect reserve fees through
- * `market_state::collect_reserve_fees_by_admin`.
+ * Unified Market markets collect reserve fees through
+ * `market::collect_reserve_fees_by_admin`.
  */
 export async function queryTreasuryInterestCollectedEvents(
   network: GrpcNetworkKind,
@@ -1874,16 +1998,16 @@ export async function queryTreasuryInterestCollectedEvents(
     }));
 }
 
-async function queryMarketStateReserveFeeCollectedEventsForPackage(
+async function queryMarketReserveFeeCollectedEventsForPackage(
   network: GrpcNetworkKind,
   jitterPackageId: string,
   marketStateId: string,
   limit = 100,
-): Promise<Array<MarketStateReserveFeeCollectedEvent & { timestampMs: number; digest: string }>> {
+): Promise<Array<MarketReserveFeeCollectedEvent & { timestampMs: number; digest: string }>> {
   const client = getSuiClient(network);
   const result = await client.queryEvents({
     query: {
-      MoveEventType: `${jitterPackageId}::market_state::MarketStateReserveFeeCollectedEvent`,
+      MoveEventType: `${jitterPackageId}::market::MarketReserveFeeCollectedEvent`,
     },
     limit,
     order: "descending",
@@ -1892,44 +2016,44 @@ async function queryMarketStateReserveFeeCollectedEventsForPackage(
   return (result.data ?? [])
     .filter(
       (e) =>
-        normalizeObjectId((e.parsedJson as MarketStateReserveFeeCollectedEvent).market_state_id) ===
+        normalizeObjectId((e.parsedJson as MarketReserveFeeCollectedEvent).market_state_id) ===
         normalizeObjectId(marketStateId),
     )
     .map((e) => ({
-      ...(e.parsedJson as MarketStateReserveFeeCollectedEvent),
+      ...(e.parsedJson as MarketReserveFeeCollectedEvent),
       timestampMs: Number(e.timestampMs ?? 0),
       digest: e.id.txDigest,
     }));
 }
 
-export async function queryMarketStateReserveFeeCollectedEvents(
+export async function queryMarketReserveFeeCollectedEvents(
   network: GrpcNetworkKind,
   config: JitterMarketConfig,
   limit = 100,
-): Promise<Array<MarketStateReserveFeeCollectedEvent & { timestampMs: number; digest: string }>> {
-  const marketStateId = resolveMarketStateObjectId(config);
+): Promise<Array<MarketReserveFeeCollectedEvent & { timestampMs: number; digest: string }>> {
+  const marketStateId = resolveMarketObjectId(config);
   if (!marketStateId) return [];
 
   const batches = await Promise.all(
     getJitterEventPackageIds(config).map((packageId) =>
-      queryMarketStateReserveFeeCollectedEventsForPackage(network, packageId, marketStateId, limit),
+      queryMarketReserveFeeCollectedEventsForPackage(network, packageId, marketStateId, limit),
     ),
   );
   return newestFirst(batches.flat(), limit);
 }
 
-async function queryMarketStateTreasuryInterestCollectedEventsForPackage(
+async function queryMarketTreasuryInterestCollectedEventsForPackage(
   network: GrpcNetworkKind,
   jitterPackageId: string,
   marketStateId: string,
   limit = 100,
 ): Promise<
-  Array<MarketStateTreasuryInterestCollectedEvent & { timestampMs: number; digest: string }>
+  Array<MarketTreasuryInterestCollectedEvent & { timestampMs: number; digest: string }>
 > {
   const client = getSuiClient(network);
   const result = await client.queryEvents({
     query: {
-      MoveEventType: `${jitterPackageId}::market_state::MarketStateTreasuryInterestCollectedEvent`,
+      MoveEventType: `${jitterPackageId}::market::MarketTreasuryInterestCollectedEvent`,
     },
     limit,
     order: "descending",
@@ -1939,30 +2063,30 @@ async function queryMarketStateTreasuryInterestCollectedEventsForPackage(
     .filter(
       (event) =>
         normalizeObjectId(
-          (event.parsedJson as MarketStateTreasuryInterestCollectedEvent).market_state_id,
+          (event.parsedJson as MarketTreasuryInterestCollectedEvent).market_state_id,
         ) === normalizeObjectId(marketStateId),
     )
     .map((event) => ({
-      ...(event.parsedJson as MarketStateTreasuryInterestCollectedEvent),
+      ...(event.parsedJson as MarketTreasuryInterestCollectedEvent),
       timestampMs: Number(event.timestampMs ?? 0),
       digest: event.id.txDigest,
     }));
 }
 
-/** Query interest-fee withdrawals from the unified MarketState treasury ledger. */
-export async function queryMarketStateTreasuryInterestCollectedEvents(
+/** Query interest-fee withdrawals from the unified Market treasury ledger. */
+export async function queryMarketTreasuryInterestCollectedEvents(
   network: GrpcNetworkKind,
   config: JitterMarketConfig,
   limit = 100,
 ): Promise<
-  Array<MarketStateTreasuryInterestCollectedEvent & { timestampMs: number; digest: string }>
+  Array<MarketTreasuryInterestCollectedEvent & { timestampMs: number; digest: string }>
 > {
-  const marketStateId = resolveMarketStateObjectId(config);
+  const marketStateId = resolveMarketObjectId(config);
   if (!marketStateId) return [];
 
   const batches = await Promise.all(
     getJitterEventPackageIds(config).map((packageId) =>
-      queryMarketStateTreasuryInterestCollectedEventsForPackage(
+      queryMarketTreasuryInterestCollectedEventsForPackage(
         network,
         packageId,
         marketStateId,
@@ -1987,7 +2111,7 @@ export async function queryScallopQuoteCollectedEvents(
   const client = getSuiClient(network);
   const result = await client.queryEvents({
     query: {
-      MoveEventType: `${config.scallopAdapterPackageId}::scallop_price_ticket::QuoteCollectedEvent`,
+      MoveEventType: `${reviewedAdapterOriginalPackageId('scallop', config.scallopAdapterPackageId)}::scallop_price_ticket::QuoteCollectedEvent`,
     },
     limit,
     order: "descending",
@@ -2039,25 +2163,26 @@ export async function getScallopMarketIndex(
   const borrowDynamicsTable = readRawField(borrowDynamics.table);
   const interestModelsTable = readRawField(interestModels.table);
 
-  const balanceSheet = await findScallopTableValue(
-    network,
-    readRequiredStringField(balanceSheetTable.id, "vault.balance_sheets.table.id"),
-    config.underlyingTypeTag,
-  );
+  const [balanceSheet, borrowDynamic, interestModel] = await Promise.all([
+    findScallopTableValue(
+      network,
+      readRequiredStringField(balanceSheetTable.id, "vault.balance_sheets.table.id"),
+      config.underlyingTypeTag,
+    ),
+    findScallopTableValue(
+      network,
+      readRequiredStringField(borrowDynamicsTable.id, "borrow_dynamics.table.id"),
+      config.underlyingTypeTag,
+    ),
+    findScallopTableValue(
+      network,
+      readRequiredStringField(interestModelsTable.id, "interest_models.table.id"),
+      config.underlyingTypeTag,
+    ),
+  ]);
   if (!balanceSheet) {
     throw new Error(`Scallop balance sheet not found for ${config.underlyingTypeTag}.`);
   }
-
-  const borrowDynamic = await findScallopTableValue(
-    network,
-    readRequiredStringField(borrowDynamicsTable.id, "borrow_dynamics.table.id"),
-    config.underlyingTypeTag,
-  );
-  const interestModel = await findScallopTableValue(
-    network,
-    readRequiredStringField(interestModelsTable.id, "interest_models.table.id"),
-    config.underlyingTypeTag,
-  );
 
   const cash = readBigIntField(balanceSheet.cash, "balance_sheet.cash");
   const debt = readBigIntField(balanceSheet.debt, "balance_sheet.debt");

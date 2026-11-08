@@ -7,6 +7,7 @@ export type JitterAdapterKind =
   | "current"
   | "scallop"
   | "ember"
+  | "haedal"
   | "suilend"
   | "navi";
 
@@ -18,6 +19,7 @@ export type AdapterPriceInfoArgs = {
 };
 
 export type AdapterDepositArgs = {
+  sweepDepositDust?: boolean;
   tx: Transaction;
   config: JitterMarketConfig;
   mintRequest: TransactionObjectArgument;
@@ -29,8 +31,9 @@ export type AdapterDepositArgs = {
 export type AdapterRedeemArgs = {
   tx: Transaction;
   config: JitterMarketConfig;
-  burnRequest: TransactionObjectArgument;
-  /** SY amount burned by jitter::sy::burn_sy_exact_in_market_state; useful as adapter share amount. */
+  /** Scallop consumes Coin<SY>; request-based adapters consume BurnSyRequest<SY>. */
+  input: TransactionObjectArgument;
+  /** Minimum receipt shares for Scallop; SY amount for request-based adapters. */
   syAmount: bigint;
 };
 
@@ -53,6 +56,7 @@ export type JitterAdapterManifest = {
   addPriceInfo(args: AdapterPriceInfoArgs): TransactionObjectArgument;
   /** Deposit-first adapters mint SY only after receiving actual upstream shares. */
   addMintFromUnderlying?(args: {
+    sweepDepositDust?: boolean;
     tx: Transaction;
     config: JitterMarketConfig;
     inputCoin: TransactionObjectArgument;

@@ -118,6 +118,7 @@ describe("JitterQuoteService", () => {
           syToMint: syIn / 4n,
           syForLiquidity: syIn - syIn / 4n,
           keptYt: syIn / 4n,
+          treasurySy: 1n,
         }),
         quoteAddLiquidityFromSy: async (syIn) => ({
           lpOut: syIn / 3n,
@@ -130,6 +131,7 @@ describe("JitterQuoteService", () => {
           ytToSell: syIn / 6n,
           ytSaleSyOut: 2n,
           syOut: 0n,
+          treasurySy: 1n,
           syRedeemOut: 8n,
           syRepaid: 6n,
           slippageBps: 9n,
@@ -150,7 +152,8 @@ describe("JitterQuoteService", () => {
     await expect(service.previewAddLpKeepYt({ syIn: 20n, syIndex: FP64_ONE })).resolves.toMatchObject({
       kind: "add-lp-keep-yt",
       positionDelta: { pt: 0n, yt: 5n, lp: 10n },
-      output: { lpOut: 10n, keptYt: 5n, syToMintHint: 5n, minLpOutHint: 10n },
+      walletDelta: { sy: -20n },
+      output: { lpOut: 10n, keptYt: 5n, treasurySy: 1n, syToMintHint: 5n, minLpOutHint: 10n },
     });
     await expect(service.previewAddLpFromSy({ syIn: 30n, syIndex: FP64_ONE })).resolves.toMatchObject({
       kind: "add-lp-from-sy",
@@ -158,11 +161,12 @@ describe("JitterQuoteService", () => {
       walletDelta: { sy: -30n },
       output: {
         lpOut: 10n,
+        treasurySy: 1n,
         firstLegLpOut: 8n,
         secondLegLpOut: 2n,
         syToMintHint: 5n,
         ytSaleSyOut: 2n,
-        minLpOutHint: 8n,
+        minLpOutHint: 10n,
         minSyOutHint: 0n,
       },
       slippageBps: 9n,

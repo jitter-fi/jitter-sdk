@@ -27,6 +27,9 @@ export type JitterUserPortfolio = {
   underlyingCoins: JitterCoinBalance[];
   marketCoinCoins: JitterCoinBalance[];
   syCoins: JitterCoinBalance[];
+  /** Standalone PT only; excludes PT held inside JitterPosition. */
+  ptCoins?: JitterCoinBalance[];
+  totalPtBalance?: bigint;
   totalUnderlyingBalance: bigint;
   totalMarketCoinBalance: bigint;
   totalSyBalance: bigint;
@@ -62,9 +65,10 @@ type CoinObjectLike = {
 export function createJitterAccountService(
   options: CreateJitterAccountServiceOptions,
 ): JitterAccountService {
+  const receiptType = options.config.emberReceiptTypeTag ?? options.config.scallopMarketCoinTypeTag;
   return {
     async getUserPyPositions(owner: string): Promise<PyPositionFields[]> {
-      const marketStateId = resolveMarketStateObjectId(options.config);
+      const marketStateId = resolveMarketObjectId(options.config);
       const positions = await getUnifiedPositions(options, owner);
       return positions
         .map((position) => normalizePyPosition(position))
@@ -90,8 +94,8 @@ export function createJitterAccountService(
     },
 
     getUserMarketCoinCoins(owner: string): Promise<JitterCoinBalance[]> {
-      if (!options.config.scallopMarketCoinTypeTag) return Promise.resolve([]);
-      return getCoins(options, owner, options.config.scallopMarketCoinTypeTag);
+      if (!receiptType) return Promise.resolve([]);
+      return getCoins(options, owner, receiptType);
     },
 
     getUserSyCoins(owner: string): Promise<JitterCoinBalance[]> {
@@ -105,9 +109,11 @@ export function createJitterAccountService(
         underlyingCoins,
         marketCoinCoins,
         syCoins,
+        ptCoins,
         totalUnderlyingBalance,
         totalMarketCoinBalance,
         totalSyBalance,
+        totalPtBalance,
         orders,
       ] = await Promise.all([
         this.getUserPyPositions(owner),
@@ -115,11 +121,13 @@ export function createJitterAccountService(
         this.getUserUnderlyingCoins(owner),
         this.getUserMarketCoinCoins(owner),
         this.getUserSyCoins(owner),
+        this.getUserCoins(owner, options.config.ptTypeTag),
         getAggregateCoinBalance(options, owner, options.config.underlyingTypeTag),
-        options.config.scallopMarketCoinTypeTag
-          ? getAggregateCoinBalance(options, owner, options.config.scallopMarketCoinTypeTag)
+        receiptType
+          ? getAggregateCoinBalance(options, owner, receiptType)
           : Promise.resolve(null),
         getAggregateCoinBalance(options, owner, options.config.syTypeTag),
+        getAggregateCoinBalance(options, owner, options.config.ptTypeTag),
         options.orderbookService?.getAllOrderbookOrders(owner) ?? [],
       ]);
 
@@ -129,6 +137,8 @@ export function createJitterAccountService(
         underlyingCoins,
         marketCoinCoins,
         syCoins,
+        ptCoins,
+        totalPtBalance: totalPtBalance ?? sumCoinBalances(ptCoins),
         totalUnderlyingBalance:
           totalUnderlyingBalance ?? sumCoinBalances(underlyingCoins),
         totalMarketCoinBalance:
@@ -149,7 +159,7 @@ async function getTransactionHistory(
   owner: string,
   limit: number,
 ): Promise<MarketActivityPage> {
-  const marketId = options.marketId ?? options.config.marketObjectId;
+  const marketId = options.config.marketObjectId;
   if (options.analyticsReader) {
     return options.analyticsReader.getMarketActivity({
       network: options.network ?? "testnet",
@@ -202,11 +212,7 @@ async function getAggregateCoinBalance(
 ): Promise<bigint | null> {
   if (!options.chainReader.getCoinBalance) return null;
 
-  try {
-    return await options.chainReader.getCoinBalance({ owner, coinTypeTag });
-  } catch {
-    return null;
-  }
+  return options.chainReader.getCoinBalance({ owner, coinTypeTag });
 }
 
 function normalizePyPosition(position: JitterPositionFields): PyPositionFields {
@@ -241,7 +247,7 @@ function normalizeLpPosition(position: JitterPositionFields): LpPositionFields {
   };
 }
 
-function resolveMarketStateObjectId(config: JitterMarketConfig): string {
+function resolveMarketObjectId(config: JitterMarketConfig): string {
   return config.marketStateObjectId ?? config.marketObjectId;
 }
 

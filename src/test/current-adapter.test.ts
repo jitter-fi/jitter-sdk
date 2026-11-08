@@ -87,6 +87,19 @@ test("manifest rejects the old mint-before-deposit route", () => {
   expect(() => manifest.addDepositToSy({ tx, config: config(), inputCoin: tx.object(id(30)), mintRequest: tx.object(id(31)), syAmount: 1n })).toThrow("deposit-first");
 });
 
+test("Current redeem manifest forwards the request through the shared input field", () => {
+  const tx = new Transaction();
+  const request = tx.moveCall({ target: `${id(1)}::test::burn_request` });
+  getJitterAdapterManifest(config()).addRedeemFromSy({
+    tx, config: config(), input: request, syAmount: 10n,
+  });
+  const redeem = calls(tx).at(-1)!;
+  expect(redeem.module).toBe("current_market_vault");
+  expect(redeem.function).toBe("redeem");
+  expect(redeem.arguments).toHaveLength(10);
+  expect(redeem.arguments[0]).toMatchObject({ Result: 0 });
+});
+
 test("service deposit uses the receipt path and propagates minimum output", async () => {
   const tx = await createJitterTransactionService({ config: config() }).buildDepositToSyTx({
     senderAddress: id(99), underlyingCoinId: id(30), underlyingAmount: 100n, minSyOut: 77n, syIndex: 1n << 64n,

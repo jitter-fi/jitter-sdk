@@ -1,16 +1,16 @@
 /**
  * Atomic "create a whole demo market" PTB.
  *
- * This builder creates the new unified MarketState object graph:
+ * This builder creates the new unified Market object graph:
  *
- * 1. `jitter::market_state::create_by_admin_cap`
+ * 1. `jitter::market::create_by_admin_cap`
  * 2. `jitter_oracle::aggregator::create_aggregator_by_admin_cap`
  * 3. Approve the demo source and bind the canonical aggregator.
  * 4. `demo_adapter::demo_market_vault::create_market_vault_by_admin`
- * 5. Share the returned MarketState and PriceAggregator objects.
+ * 5. Share the returned Market and PriceAggregator objects.
  *
  * It intentionally does not create the legacy split Market + PyState + Pool
- * object set. New SDK/admin flows should use MarketState records.
+ * object set. New SDK/admin flows should use Market records.
  */
 
 import {
@@ -110,7 +110,7 @@ export function buildBootstrapMarketTx(p: BootstrapMarketParams): Transaction {
   const treasury = p.treasuryAddress ?? p.senderAddress;
 
   const marketStateObj = tx.moveCall({
-    target: `${p.jitterPackageId}::market_state::create_by_admin_cap`,
+    target: `${p.jitterPackageId}::market::create_by_admin_cap`,
     typeArguments: [sy, pt, yt],
     arguments: [
       tx.object(p.adminCapObjectId),
@@ -151,7 +151,7 @@ export function buildBootstrapMarketTx(p: BootstrapMarketParams): Transaction {
   }) as TransactionObjectArgument;
 
   const marketStateId = tx.moveCall({
-    target: `${p.jitterPackageId}::market_state::id`,
+    target: `${p.jitterPackageId}::market::id`,
     typeArguments: [sy, pt, yt],
     arguments: [marketStateObj],
   });
@@ -185,7 +185,7 @@ export function buildBootstrapMarketTx(p: BootstrapMarketParams): Transaction {
   });
 
   tx.moveCall({
-    target: `${p.jitterPackageId}::market_state::bind_price_aggregator_by_admin`,
+    target: `${p.jitterPackageId}::market::bind_price_aggregator_by_admin`,
     typeArguments: [sy, pt, yt],
     arguments: [
       marketStateObj,
@@ -211,7 +211,7 @@ export function buildBootstrapMarketTx(p: BootstrapMarketParams): Transaction {
   tx.moveCall({
     target: "0x2::transfer::public_share_object",
     typeArguments: [
-      `${p.jitterPackageId}::market_state::MarketState<${sy},${pt},${yt}>`,
+      `${p.jitterPackageId}::market::Market<${sy},${pt},${yt}>`,
     ],
     arguments: [marketStateObj],
   });

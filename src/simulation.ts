@@ -11,8 +11,10 @@
 
 import { bcs } from "@mysten/sui/bcs";
 import { Transaction } from "@mysten/sui/transactions";
+import { assertValidYtSaleQuote } from "./domain/yt-sale-quote.js";
 
 import { FP64_ONE } from "./constants.js";
+import { getHaedalStakeQuote } from "./adapters/haedal.js";
 import { getPoolState, getPyState, getScallopMarketIndex } from "./queries.js";
 import { getSuiGrpcClient, type GrpcNetworkKind } from "./rpc.js";
 import type { JitterMarketConfig } from "./types.js";
@@ -122,6 +124,7 @@ async function resolveQuoteSyIndex(
   override?: bigint,
 ): Promise<bigint> {
   if (override !== undefined) return override;
+  if (config.haedalAdapterPackageId) return (await getHaedalStakeQuote(network, config, 0n)).syIndex;
   if (hasScallopRouteConfigured(config)) {
     const scallopIndex = await getScallopMarketIndex(network, config);
     return BigInt(scallopIndex.syIndexRaw);
@@ -167,7 +170,7 @@ function requireJitterViewPackageId(config: JitterMarketConfig): string {
   return config.jitterViewPackageId;
 }
 
-function resolveMarketStateObjectId(config: JitterMarketConfig): string {
+function resolveMarketObjectId(config: JitterMarketConfig): string {
   if (config.marketStateObjectId) return config.marketStateObjectId;
   if (
     config.marketObjectId &&
@@ -272,17 +275,21 @@ export type QuoteAddLiquidityKeepYt = QuoteAddLiquidity & {
   syToMint: bigint;
   syForLiquidity: bigint;
   keptYt: bigint;
+  syOut?: bigint;
+  /** Bounded raw SY sent to the configured market Treasury, not to the user. */
+  treasurySy?: bigint;
+  ptDust?: bigint;
 };
 
 export type QuoteAddLiquidityFromSy = QuoteAddLiquidityKeepYt & {
   firstLegLpOut: bigint;
   secondLegLpOut: bigint;
   slippageBps: bigint;
-  /** Conservative final SY change. The second LP leg is allowed to consume the YT-sale proceeds. */
+  /** Canonical full-input routes return zero SY to the user. */
   syOut: bigint;
   syRedeemOut: bigint;
   syRepaid: bigint;
-  /** Net SY produced by selling YT before it is routed into the second LP leg. */
+  /** Legacy compatibility field; zero when no YT sale occurs. */
   ytSaleSyOut: bigint;
   ytToSell: bigint;
 };
@@ -306,7 +313,7 @@ export async function quoteSwapSyForPt(
   const syIndexRaw = await resolveQuoteSyIndex(network, config, syIndex);
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const jitterViewPackageId = requireJitterViewPackageId(config);
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
 
   tx.moveCall({
     target: `${jitterViewPackageId}::offchain::estimate_market_state_swap_sy_for_pt`,
@@ -347,7 +354,7 @@ export async function quoteSwapPtForSy(
   const syIndexRaw = await resolveQuoteSyIndex(network, config, syIndex);
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const jitterViewPackageId = requireJitterViewPackageId(config);
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
 
   tx.moveCall({
     target: `${jitterViewPackageId}::offchain::estimate_market_state_swap_pt_for_sy`,
@@ -388,7 +395,7 @@ export async function quoteSwapSyForExactPt(
   const syIndexRaw = await resolveQuoteSyIndex(network, config, syIndex);
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const jitterViewPackageId = requireJitterViewPackageId(config);
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
 
   tx.moveCall({
     target: `${jitterViewPackageId}::offchain::estimate_market_state_swap_sy_for_exact_pt`,
@@ -432,7 +439,7 @@ export async function quoteSwapPtForExactSy(
   const syIndexRaw = await resolveQuoteSyIndex(network, config, syIndex);
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const jitterViewPackageId = requireJitterViewPackageId(config);
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
 
   tx.moveCall({
     target: `${jitterViewPackageId}::offchain::estimate_market_state_swap_pt_for_exact_sy`,
@@ -460,7 +467,7 @@ export async function quoteSwapSyForYt(
   const tx = new Transaction();
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const jitterViewPackageId = requireJitterViewPackageId(config);
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
 
   // returns (yt_out, sy_change)
   tx.moveCall({
@@ -506,7 +513,7 @@ export async function quoteSwapSyForExactYt(
   const tx = new Transaction();
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const jitterViewPackageId = requireJitterViewPackageId(config);
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
 
   // returns (actual_yt_out, sy_to_mint, sy_from_pt_sale, net_sy_in)
   tx.moveCall({
@@ -553,7 +560,7 @@ export async function quoteSwapYtForSy(
   const tx = new Transaction();
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const jitterViewPackageId = requireJitterViewPackageId(config);
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
 
   tx.moveCall({
     target: `${jitterViewPackageId}::offchain::estimate_market_state_swap_yt_for_sy`,
@@ -581,9 +588,10 @@ export async function quoteSwapYtForSy(
 
   const results = await simulate(network, tx);
   const rv0 = results[0]?.returnValues;
-  const syOut = decodeOptionalU64(rv0?.[0]);
-  const syRedeemOut = decodeOptionalU64(rv0?.[1]);
-  const syRepaid = decodeOptionalU64(rv0?.[2]);
+  const syOut = decodeRequiredU64(rv0?.[0], 0);
+  const syRedeemOut = decodeRequiredU64(rv0?.[1], 0);
+  const syRepaid = decodeRequiredU64(rv0?.[2], 0);
+  assertValidYtSaleQuote(ytIn, syOut, syRedeemOut, syRepaid);
   const slippageBps = decodeU64(results, 1);
   return { syOut, syRedeemOut, syRepaid, slippageBps };
 }
@@ -597,7 +605,7 @@ export async function quotePrices(
   const tx = new Transaction();
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const jitterViewPackageId = requireJitterViewPackageId(config);
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
 
   tx.moveCall({
     target: `${jitterViewPackageId}::offchain::estimate_market_state_pt_price`,
@@ -637,7 +645,7 @@ export async function quoteLpValue(
   const tx = new Transaction();
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const jitterViewPackageId = requireJitterViewPackageId(config);
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
 
   tx.moveCall({
     target: `${jitterViewPackageId}::offchain::estimate_market_state_lp_value`,
@@ -675,7 +683,7 @@ export async function quoteRemoveLpToSy(
   const syIndexRaw = await resolveQuoteSyIndex(network, config, syIndex);
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const jitterViewPackageId = requireJitterViewPackageId(config);
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
 
   tx.moveCall({
     target: `${jitterViewPackageId}::offchain::estimate_market_state_remove_lp_to_sy`,
@@ -837,166 +845,84 @@ export async function quoteAddLiquidityZap(
   return best ?? empty;
 }
 
-/**
- * Preview keep-YT liquidity: split exact SY input into a mint leg and an LP leg.
- * The mint leg creates PT+YT, the PT pairs with the remaining SY, and the YT
- * stays in the user's PyPosition.
- */
+/** Exact contract preview of the canonical full-input Keep route. */
 export async function quoteAddLiquidityKeepYt(
-  network: GrpcNetworkKind,
-  config: JitterMarketConfig,
-  syIn: bigint,
-  syIndex: bigint,
+  network: GrpcNetworkKind, config: JitterMarketConfig, syIn: bigint, syIndex: bigint,
 ): Promise<QuoteAddLiquidityKeepYt> {
-  if (syIn <= 1n) {
-    return {
-      lpOut: 0n,
-      pairedPt: 0n,
-      syToMint: 0n,
-      syForLiquidity: 0n,
-      keptYt: 0n,
-    };
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${config.jitterPackageId}::router::quote_add_lp_keep_yt`,
+    arguments: [tx.pure.u64(syIn), tx.object(resolveMarketObjectId(config)),
+      tx.pure.u128(syIndex), tx.object.clock()],
+    typeArguments: marketStateTypeArguments(config),
+  });
+  const results = await simulate(network, tx);
+  const read = (slot: number) => decodeRequiredU64(results[0]?.returnValues?.[slot], 0);
+  const [lpOut, keptYt, syToMint, syForLiquidity, treasurySy, ptDust] = [0, 1, 2, 3, 4, 5].map(read);
+  assertFullLpQuote(syIn, lpOut, treasurySy, true);
+  if (keptYt === 0n || syToMint + syForLiquidity !== syIn || ptDust > keptYt) {
+    throw new Error("Invalid Keep liquidity quote");
   }
-
-  const [pool, pyState] = await Promise.all([
-    getPoolState(network, config),
-    getPyState(network, config),
-  ]);
-  const totalSy = BigInt(pool.total_sy);
-  const totalPt = BigInt(pool.total_pt);
-  const totalLp = BigInt(pool.lp_supply);
-  const pyIndexStored = BigInt(pyState.py_index_stored);
-  const pyIndex = syIndex > pyIndexStored ? syIndex : pyIndexStored;
-
-  const syToMint =
-    totalSy > 0n && totalPt > 0n
-      ? mulDivFloor(
-          syIn,
-          totalPt * FP64_ONE,
-          totalPt * FP64_ONE + totalSy * pyIndex,
-        )
-      : mulDivFloor(syIn, 7n, 20n);
-  const syForLiquidity = syIn > syToMint ? syIn - syToMint : 0n;
-  const keptYt = mulDivFloor(syToMint, pyIndex, FP64_ONE);
-  const lpOut = estimateLpOutByPoolMath(
-    totalLp,
-    totalSy,
-    totalPt,
-    syForLiquidity,
-    keptYt,
-  );
-
-  return {
-    lpOut,
-    pairedPt: keptYt,
-    syToMint,
-    syForLiquidity,
-    keptYt,
-  };
+  return { lpOut, pairedPt: keptYt - ptDust, syToMint, syForLiquidity, keptYt, syOut: 0n, treasurySy, ptDust };
 }
 
-/**
- * Preview single-SY LP without keeping YT. The on-chain route first uses the
- * keep-YT split, then sells the minted YT through the PT borrow/repay route.
- */
+const balancedLpBcs = bcs.struct("Quote", {
+  status: bcs.u8(), pt: bcs.u64(), cost: bcs.u64(), lp: bcs.u64(), refund: bcs.u64(),
+  pt_dust: bcs.u64(), iterations: bcs.u64(), blocked_pt: bcs.u64(), spend_upper: bcs.u256(),
+});
+
+function assertFullLpQuote(input: bigint, lp: bigint, refund: bigint, keepYt = false) {
+  const limit = input / 1_000_000n > 1n ? input / 1_000_000n : 1n;
+  if (input <= 1n || lp === 0n || refund >= input || (!keepYt && refund > limit)) {
+    throw new Error("Full liquidity quote exceeds the SY refund limit or has no LP output");
+  }
+}
+
+/** Quotes buy-exact-PT plus a proportional add as one balanced allocation.
+ * Legacy YT-sale fields remain zero for compatibility, not a synthetic sale. */
 export async function quoteAddLiquidityFromSy(
-  network: GrpcNetworkKind,
-  config: JitterMarketConfig,
-  syIn: bigint,
-  syIndex: bigint,
+  network: GrpcNetworkKind, config: JitterMarketConfig, syIn: bigint, syIndex: bigint,
 ): Promise<QuoteAddLiquidityFromSy> {
-  const preferred = await quoteAddLiquidityKeepYt(network, config, syIn, syIndex);
-  const pool = await getPoolState(network, config);
-  if (BigInt(pool.lp_supply) === 0n) {
-    return {
-      ...preferred,
-      firstLegLpOut: preferred.lpOut,
-      secondLegLpOut: 0n,
-      slippageBps: 0n,
-      syOut: 0n,
-      syRedeemOut: 0n,
-      syRepaid: 0n,
-      ytSaleSyOut: 0n,
-      ytToSell: preferred.keptYt,
-    };
-  }
-
-  const totalSy = BigInt(pool.total_sy);
-  const totalPt = BigInt(pool.total_pt);
-  const totalLp = BigInt(pool.lp_supply);
-  const syToMint = await constrainNonKeepYtMintForQuote({
-    preferredSyToMint: preferred.syToMint,
-    totalPt,
-    syIndex,
-    quotePtOut: async (grossSy) =>
-      (await quoteSwapSyForPt(network, config, grossSy, syIndex)).ptOut,
+  if (!config.jitterMathPackageId) throw new Error("Balanced LP quotes require jitterMathPackageId");
+  const tx = new Transaction();
+  const quoteResult = tx.moveCall({
+    target: `${config.jitterPackageId}::market::quote_balanced_lp`,
+    arguments: [tx.pure.u64(syIn), tx.object(resolveMarketObjectId(config)),
+      tx.pure.u128(syIndex), tx.object.clock()],
+    typeArguments: marketStateTypeArguments(config),
   });
-  const syForLiquidity = syIn > syToMint ? syIn - syToMint : 0n;
-  const keptYt = mulDivFloor(syToMint, syIndex, FP64_ONE);
-  const firstLegLpOut = estimateLpOutByPoolMath(
-    totalLp,
-    totalSy,
-    totalPt,
-    syForLiquidity,
-    keptYt,
-  );
-  const constrained = {
-    lpOut: firstLegLpOut,
-    pairedPt: keptYt,
-    syToMint,
-    syForLiquidity,
-    keptYt,
-  };
-
-  if (firstLegLpOut <= 0n || keptYt <= 0n) {
-    return {
-      ...constrained,
-      firstLegLpOut,
-      secondLegLpOut: 0n,
-      slippageBps: 0n,
-      syOut: 0n,
-      syRedeemOut: 0n,
-      syRepaid: 0n,
-      ytSaleSyOut: 0n,
-      ytToSell: 0n,
-    };
+  // Quote, exact-PT cost and spot price must share one market snapshot and Clock.
+  const amounts = tx.moveCall({ target: `${config.jitterMathPackageId}::lp_balance::amounts`, arguments: [quoteResult] });
+  const view = requireJitterViewPackageId(config), global = tx.object(requireGlobalConfigObjectId(config));
+  tx.moveCall({ target: `${view}::offchain::estimate_market_state_swap_sy_for_exact_pt`,
+    typeArguments: marketStateTypeArguments(config), arguments: [global, amounts[0], tx.pure.u128(syIndex),
+      tx.object(resolveMarketObjectId(config)), tx.object.clock()] });
+  tx.moveCall({ target: `${view}::offchain::estimate_market_state_pt_price`,
+    typeArguments: marketStateTypeArguments(config), arguments: [global, tx.object(resolveMarketObjectId(config)),
+      tx.pure.u128(syIndex), tx.object.clock()] });
+  const results = await simulate(network, tx);
+  const bytes = results[0]?.returnValues?.[0]?.bcs;
+  if (!bytes) throw new Error("Missing balanced LP quote");
+  const quote = balancedLpBcs.parse(bytes);
+  if (quote.status !== 1) {
+    const reason = quote.status === 2 ? "curve-limit" : quote.status === 3
+      ? "precision-unresolved" : quote.status === 4 ? "search-incomplete" : "invalid-input";
+    throw new Error(`Full liquidity quote unavailable (${reason})`);
   }
-
-  try {
-    const ytSale = await quoteSwapYtForSy(network, config, keptYt, syIndex);
-    return {
-      ...constrained,
-      // The second LP leg executes against reserves already changed by the
-      // first add and the YT sale. Keep the quote as an executable floor until
-      // a sequential-state view quote is available.
-      lpOut: firstLegLpOut,
-      firstLegLpOut,
-      secondLegLpOut: 0n,
-      slippageBps: ytSale.slippageBps,
-      // The on-chain route reinvests the YT-sale proceeds. Without a full PTB
-      // simulation, zero is the only sound lower bound for the final refund.
-      syOut: 0n,
-      syRedeemOut: ytSale.syRedeemOut,
-      syRepaid: ytSale.syRepaid,
-      ytSaleSyOut: ytSale.syOut,
-      ytToSell: keptYt,
-    };
-  } catch {
-    return {
-      ...constrained,
-      lpOut: firstLegLpOut,
-      firstLegLpOut,
-      secondLegLpOut: 0n,
-      // A failed standalone YT quote usually means the route is at its current
-      // capacity boundary. Never present that case as zero price impact.
-      slippageBps: 10_000n,
-      syOut: 0n,
-      syRedeemOut: 0n,
-      syRepaid: 0n,
-      ytSaleSyOut: 0n,
-      ytToSell: keptYt,
-    };
+  const lpOut = BigInt(quote.lp), syOut = BigInt(quote.refund);
+  const pt = BigInt(quote.pt), cost = BigInt(quote.cost), ptDust = BigInt(quote.pt_dust);
+  assertFullLpQuote(syIn, lpOut, syOut);
+  if (pt === 0n || cost === 0n || cost >= syIn || ptDust > pt || syOut > syIn - cost) {
+    throw new Error("Invalid balanced LP quote");
   }
+  if (decodeU64(results, 2) !== cost) throw new Error("Liquidity quote changed; request a new quote");
+  const spot = decodeU128(results, 3);
+  if (spot <= 0n) throw new Error("Invalid balanced LP spot price");
+  const executionPrice = mulDivCeil(cost, FP64_ONE, pt);
+  const slippageBps = executionPrice > spot ? mulDivCeil(executionPrice - spot, 10_000n, spot) : 0n;
+  return { lpOut, pairedPt: pt - ptDust, syToMint: 0n, syForLiquidity: syIn - cost,
+    keptYt: 0n, firstLegLpOut: lpOut, secondLegLpOut: 0n, slippageBps,
+    syOut: 0n, treasurySy: syOut, ptDust, syRedeemOut: 0n, syRepaid: 0n, ytSaleSyOut: 0n, ytToSell: 0n };
 }
 
 export async function constrainNonKeepYtMintForQuote(input: {
@@ -1044,7 +970,7 @@ export async function quoteClaimableInterest(
   const tx = new Transaction();
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const jitterViewPackageId = requireJitterViewPackageId(config);
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
 
   tx.moveCall({
     target: `${jitterViewPackageId}::offchain::estimate_market_state_claimable_interest`,
@@ -1068,7 +994,7 @@ export async function quoteIsMarketExpired(
   const tx = new Transaction();
   const globalConfigObjectId = requireGlobalConfigObjectId(config);
   const jitterViewPackageId = requireJitterViewPackageId(config);
-  const marketStateObjectId = resolveMarketStateObjectId(config);
+  const marketStateObjectId = resolveMarketObjectId(config);
 
   tx.moveCall({
     target: `${jitterViewPackageId}::offchain::is_market_state_expired`,

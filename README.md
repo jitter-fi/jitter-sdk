@@ -51,6 +51,19 @@ AI agents working in this package should read `AGENTS.md`.
 
 ## Compatibility
 
+### 0.2.0 Snapshot
+
+This release synchronizes the SDK used by the production application as of
+2026-11-08. See `CHANGELOG.md` for migration notes and validation results.
+The public service/facade APIs remain the preferred integration surface;
+generated bindings now reflect the upgraded contracts and are not guaranteed
+to retain obsolete low-level fields or function names.
+
+Known mainnet deployments are routed to the reviewed Core v3 dependency set.
+Original type identities and existing market/position object IDs are preserved;
+unknown/custom deployment IDs are not silently redirected. Do not hardcode a
+Core v2 runtime package ID or assume SY decimals match the receipt asset.
+
 Existing code can keep using:
 
 ```ts

@@ -85,7 +85,7 @@ describe("adapter manifests", () => {
       manifest.addRedeemFromSy({
         tx,
         config,
-        burnRequest: priceInfo,
+        input: priceInfo,
         syAmount: 1n,
       });
     });
@@ -114,7 +114,7 @@ describe("adapter manifests", () => {
       manifest.addRedeemFromSy({
         tx,
         config,
-        burnRequest: priceInfo,
+        input: priceInfo,
         syAmount: 123n,
       });
     });

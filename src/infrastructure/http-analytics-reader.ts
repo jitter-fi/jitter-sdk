@@ -4,6 +4,7 @@ import type {
   MarketActivityQuery,
   MarketAnalyticsQuery,
   MarketAnalyticsResult,
+  MarketMetadataResult,
   MarketChartQuery,
   MarketChartSeries,
   OrderbookLadderQuery,
@@ -36,6 +37,13 @@ export class HttpJitterAnalyticsReader implements JitterAnalyticsReader {
   getMarketAnalytics(query: MarketAnalyticsQuery): Promise<MarketAnalyticsResult> {
     return this.getJson<MarketAnalyticsResult>(
       `/v1/markets/${encodeURIComponent(query.marketId)}/analytics`,
+      { network: query.network },
+    );
+  }
+
+  getMarketMetadata(query: MarketAnalyticsQuery): Promise<MarketMetadataResult> {
+    return this.getJson<MarketMetadataResult>(
+      `/v1/markets/${encodeURIComponent(query.marketId)}/metadata`,
       { network: query.network },
     );
   }

@@ -85,5 +85,5 @@ export const currentAdapterManifest: JitterAdapterManifest = {
   addPriceInfo: ({ tx, config }) => addCurrentPriceInfo(tx, config),
   addMintFromUnderlying: ({ tx, config, inputCoin, minSyOut }) => addCurrentDepositToSy(tx, config, inputCoin, minSyOut),
   addDepositToSy() { throw new Error("Current requires the deposit-first receipt flow; use addCurrentDepositToSy."); },
-  addRedeemFromSy: ({ tx, config, burnRequest }) => ({ outputCoin: addCurrentRedeem(tx, config, burnRequest) }),
+  addRedeemFromSy: ({ tx, config, input }) => ({ outputCoin: addCurrentRedeem(tx, config, input) }),
 };

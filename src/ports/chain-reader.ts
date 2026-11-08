@@ -17,6 +17,20 @@ export type DynamicFieldObjectQuery = {
   limit?: number;
 };
 
+export type ChainObjectInfo<TFields = Record<string, unknown>> = {
+  objectId: string;
+  type: string;
+  version: string;
+  owner: unknown;
+  fields: TFields;
+};
+
+export type DynamicFieldPage<TFields = Record<string, unknown>> = {
+  data: ChainObjectInfo<TFields>[];
+  hasNextPage: boolean;
+  nextCursor: string | null;
+};
+
 export type CoinBalanceQuery = {
   owner: string;
   coinTypeTag: string;
@@ -31,6 +45,10 @@ export type PoolVolumeStatsSnapshot = {
 };
 
 export interface JitterChainReader {
+  getObjectInfo?<TFields>(objectId: string): Promise<ChainObjectInfo<TFields>>;
+  getDynamicFieldPage?<TFields>(
+    query: DynamicFieldObjectQuery,
+  ): Promise<DynamicFieldPage<TFields>>;
   getObject<TFields>(objectId: string): Promise<TFields>;
   getPoolState(config: JitterMarketConfig): Promise<PoolFields>;
   getPyState(config: JitterMarketConfig): Promise<PyStateFields>;

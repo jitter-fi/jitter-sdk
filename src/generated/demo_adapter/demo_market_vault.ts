@@ -8,7 +8,7 @@
  *
  * The package has one shared `DemoAdapter` object that represents the external
  * protocol integration, and one `DemoMarketVault` per Jitter market. Each market
- * keeps its own SY/PT/YT trio and expiry inside `jitter::market_state`, while the
+ * keeps its own SY/PT/YT trio and expiry inside `jitter::market`, while the
  * adapter vault owns:
  *
  * - underlying custody

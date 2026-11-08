@@ -14,7 +14,8 @@ export const QuoteCollectedEvent = new MoveStruct({ name: `${$moduleName}::Quote
         ember_vault_id: bcs.Address,
         vault_rate: bcs.u64(),
         sy_index: bcs.u128(),
-        updated_at: bcs.u64()
+        updated_at: bcs.u64(),
+        quoted_at: bcs.u64()
     } });
 export interface QuoteArguments {
     globalConfig: RawTransactionArgument<string>;

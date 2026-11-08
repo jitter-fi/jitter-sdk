@@ -20,7 +20,7 @@ export interface QuoteArguments {
     globalConfig: RawTransactionArgument<string>;
     collector: RawTransactionArgument<string>;
     vault: RawTransactionArgument<string>;
-    reserve: RawTransactionArgument<string>;
+    lendingMarket: RawTransactionArgument<string>;
 }
 export interface QuoteOptions {
     package?: string;
@@ -28,7 +28,7 @@ export interface QuoteOptions {
         globalConfig: RawTransactionArgument<string>,
         collector: RawTransactionArgument<string>,
         vault: RawTransactionArgument<string>,
-        reserve: RawTransactionArgument<string>
+        lendingMarket: RawTransactionArgument<string>
     ];
     typeArguments: [
         string,
@@ -47,7 +47,7 @@ export function quote(options: QuoteOptions) {
         null,
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["globalConfig", "collector", "vault", "reserve"];
+    const parameterNames = ["globalConfig", "collector", "vault", "lendingMarket"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'suilend_price_ticket',
@@ -57,12 +57,14 @@ export function quote(options: QuoteOptions) {
     });
 }
 export interface CurrentSyIndexArguments {
-    reserve: RawTransactionArgument<string>;
+    lendingMarket: RawTransactionArgument<string>;
+    reserveIndex: RawTransactionArgument<number | bigint>;
 }
 export interface CurrentSyIndexOptions {
     package?: string;
     arguments: CurrentSyIndexArguments | [
-        reserve: RawTransactionArgument<string>
+        lendingMarket: RawTransactionArgument<string>,
+        reserveIndex: RawTransactionArgument<number | bigint>
     ];
     typeArguments: [
         string
@@ -71,9 +73,11 @@ export interface CurrentSyIndexOptions {
 export function currentSyIndex(options: CurrentSyIndexOptions) {
     const packageAddress = options.package ?? 'jitter/suilend-adapter';
     const argumentsTypes = [
-        null
+        null,
+        'u64',
+        '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["reserve"];
+    const parameterNames = ["lendingMarket", "reserveIndex"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'suilend_price_ticket',
