@@ -39,6 +39,12 @@ export const DepositEvent = new MoveStruct({ name: `${$moduleName}::DepositEvent
         ctoken_change_out: bcs.u64(),
         depositor: bcs.Address
     } });
+export const ReceiptRedeemedEvent = new MoveStruct({ name: `${$moduleName}::ReceiptRedeemedEvent`, fields: {
+        market_id: bcs.Address,
+        vault_id: bcs.Address,
+        receipt_amount: bcs.u64(),
+        redeemer: bcs.Address
+    } });
 export const RedeemEvent = new MoveStruct({ name: `${$moduleName}::RedeemEvent`, fields: {
         market_id: bcs.Address,
         reserve_id: bcs.Address,
@@ -46,12 +52,56 @@ export const RedeemEvent = new MoveStruct({ name: `${$moduleName}::RedeemEvent`,
         ctoken_out: bcs.u64(),
         redeemer: bcs.Address
     } });
+export interface RedeemReceiptArguments {
+    syCoin: RawTransactionArgument<string>;
+    syState: RawTransactionArgument<string>;
+    globalConfig: RawTransactionArgument<string>;
+    vault: RawTransactionArgument<string>;
+    market: RawTransactionArgument<string>;
+}
+export interface RedeemReceiptOptions {
+    package?: string;
+    arguments: RedeemReceiptArguments | [
+        syCoin: RawTransactionArgument<string>,
+        syState: RawTransactionArgument<string>,
+        globalConfig: RawTransactionArgument<string>,
+        vault: RawTransactionArgument<string>,
+        market: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string,
+        string,
+        string
+    ];
+}
+/** Return escrowed receipt units without pricing them in the economic underlying. */
+export function redeemReceipt(options: RedeemReceiptOptions) {
+    const packageAddress = options.package ?? 'jitter/suilend-adapter';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        null,
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["syCoin", "syState", "globalConfig", "vault", "market"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'suilend_market_vault',
+        function: 'redeem_receipt',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
 export interface CreateMarketVaultBy_ACLArguments {
     acl: RawTransactionArgument<string>;
     syState: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
     market: RawTransactionArgument<string>;
-    reserve: RawTransactionArgument<string>;
+    lendingMarket: RawTransactionArgument<string>;
 }
 export interface CreateMarketVaultBy_ACLOptions {
     package?: string;
@@ -60,7 +110,7 @@ export interface CreateMarketVaultBy_ACLOptions {
         syState: RawTransactionArgument<string>,
         globalConfig: RawTransactionArgument<string>,
         market: RawTransactionArgument<string>,
-        reserve: RawTransactionArgument<string>
+        lendingMarket: RawTransactionArgument<string>
     ];
     typeArguments: [
         string,
@@ -80,7 +130,7 @@ export function createMarketVaultBy_ACL(options: CreateMarketVaultBy_ACLOptions)
         null,
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["acl", "syState", "globalConfig", "market", "reserve"];
+    const parameterNames = ["acl", "syState", "globalConfig", "market", "lendingMarket"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'suilend_market_vault',
@@ -94,7 +144,7 @@ export interface CreateMarketVaultByAdminArguments {
     syState: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
     market: RawTransactionArgument<string>;
-    reserve: RawTransactionArgument<string>;
+    lendingMarket: RawTransactionArgument<string>;
 }
 export interface CreateMarketVaultByAdminOptions {
     package?: string;
@@ -103,7 +153,7 @@ export interface CreateMarketVaultByAdminOptions {
         syState: RawTransactionArgument<string>,
         globalConfig: RawTransactionArgument<string>,
         market: RawTransactionArgument<string>,
-        reserve: RawTransactionArgument<string>
+        lendingMarket: RawTransactionArgument<string>
     ];
     typeArguments: [
         string,
@@ -123,7 +173,7 @@ export function createMarketVaultByAdmin(options: CreateMarketVaultByAdminOption
         null,
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["Admin", "syState", "globalConfig", "market", "reserve"];
+    const parameterNames = ["Admin", "syState", "globalConfig", "market", "lendingMarket"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'suilend_market_vault',
@@ -139,7 +189,7 @@ export interface DepositArguments {
     globalConfig: RawTransactionArgument<string>;
     vault: RawTransactionArgument<string>;
     market: RawTransactionArgument<string>;
-    reserve: RawTransactionArgument<string>;
+    lendingMarket: RawTransactionArgument<string>;
 }
 export interface DepositOptions {
     package?: string;
@@ -150,7 +200,7 @@ export interface DepositOptions {
         globalConfig: RawTransactionArgument<string>,
         vault: RawTransactionArgument<string>,
         market: RawTransactionArgument<string>,
-        reserve: RawTransactionArgument<string>
+        lendingMarket: RawTransactionArgument<string>
     ];
     typeArguments: [
         string,
@@ -179,7 +229,7 @@ export function deposit(options: DepositOptions) {
         null,
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["request", "ctokenCoin", "syState", "globalConfig", "vault", "market", "reserve"];
+    const parameterNames = ["request", "ctokenCoin", "syState", "globalConfig", "vault", "market", "lendingMarket"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'suilend_market_vault',
@@ -194,7 +244,7 @@ export interface RedeemArguments {
     globalConfig: RawTransactionArgument<string>;
     vault: RawTransactionArgument<string>;
     market: RawTransactionArgument<string>;
-    reserve: RawTransactionArgument<string>;
+    lendingMarket: RawTransactionArgument<string>;
 }
 export interface RedeemOptions {
     package?: string;
@@ -204,7 +254,7 @@ export interface RedeemOptions {
         globalConfig: RawTransactionArgument<string>,
         vault: RawTransactionArgument<string>,
         market: RawTransactionArgument<string>,
-        reserve: RawTransactionArgument<string>
+        lendingMarket: RawTransactionArgument<string>
     ];
     typeArguments: [
         string,
@@ -226,7 +276,7 @@ export function redeem(options: RedeemOptions) {
         null,
         '0x2::clock::Clock'
     ] satisfies (string | null)[];
-    const parameterNames = ["request", "syState", "globalConfig", "vault", "market", "reserve"];
+    const parameterNames = ["request", "syState", "globalConfig", "vault", "market", "lendingMarket"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'suilend_market_vault',
@@ -427,16 +477,12 @@ export interface CurrentCtokenRatioWadOptions {
         string
     ];
 }
-/**
- * Returns the cToken exchange rate stored in the active Suilend Reserve.
- *
- * Suilend updates this value when its lending market accrues interest. The active
- * mainnet ABI does not expose the source-only simulated ratio helper.
- */
+/** Reading a cached ratio is only valid after accrual in the current second. */
 export function currentCtokenRatioWad(options: CurrentCtokenRatioWadOptions) {
     const packageAddress = options.package ?? 'jitter/suilend-adapter';
     const argumentsTypes = [
-        null
+        null,
+        '0x2::clock::Clock'
     ] satisfies (string | null)[];
     const parameterNames = ["reserve"];
     return (tx: Transaction) => tx.moveCall({

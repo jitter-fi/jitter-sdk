@@ -3,9 +3,13 @@ import {
   type TransactionArgument,
   type TransactionObjectArgument,
 } from "@mysten/sui/transactions";
+import { normalizeStructTag, normalizeSuiAddress } from "@mysten/sui/utils";
 
 import { getJitterAdapterManifest } from "../adapters/registry.js";
 import type { JitterAdapterManifest } from "../adapters/types.js";
+import { resolveReceiptAdapter } from "../adapters/receipt.js";
+import { addDepositDustToTreasury } from "../adapters/deposit-dust.js";
+import { HAEDAL_RECEIPT_TYPE } from "../adapters/haedal.js";
 
 import { DEFAULT_DEMO_SY_INDEX, FP64_ONE, SUI_TYPE_TAG } from "../constants.js";
 import {
@@ -18,6 +22,8 @@ import { addClaimYtInterest, addCreatePosition, addCreatePyPosition } from "../p
 import { addSwapSyForPt } from "../pool.js";
 import type { RemoveLpToSyRoute } from "../simulation.js";
 import {
+  addBindLpReferrerWithLiquidlinkPoints,
+  addBindYtReferrerWithLiquidlinkPoints,
   addCreateLpReferralRecordWithLiquidlinkPoints,
   addCreateYtReferralRecordWithLiquidlinkPoints,
   addSyncPyPositionWithLiquidlinkPoints,
@@ -29,9 +35,20 @@ import {
   addSettleCoinRewardOperation,
   hasCoinRewardConfig,
 } from "../coin-reward.js";
-import { addBurnSyExactIn, addMintSyExactIn, addScallopDeposit } from "../sy.js";
+import { addBurnSyExactIn, addMintSyExactIn, addReceiptRedeem, addScallopDeposit, addScallopRedeem } from "../sy.js";
+import { addHaedalMintReceiptToSy, getHaedalStakeQuote } from "../adapters/haedal.js";
+import {addEmberMintReceiptToSy,getEmberDepositQuote} from '../adapters/ember.js';
 import type { JitterMarketConfig } from "../types.js";
 import type { GrpcNetworkKind } from "../rpc.js";
+import { createPointConfigReader, resolveLiquidlinkPointConfig, type PointConfigReader } from "../infrastructure/point-claims-reader.js";
+
+/** A transform must consume the SY coin when returning null. */
+export type SyOutputTransform = (tx: Transaction, coin: TransactionObjectArgument) => TransactionObjectArgument | null;
+
+export type FullLiquidityObserver = (tx: Transaction, observation: {
+  refundSy: TransactionObjectArgument;
+  keepYt: boolean;
+}) => void;
 
 export type CreateJitterTransactionServiceOptions = {
   config: JitterMarketConfig;
@@ -39,6 +56,15 @@ export type CreateJitterTransactionServiceOptions = {
   gasBudget?: bigint;
   resolveSyIndex?: () => Promise<bigint> | bigint;
   network?: GrpcNetworkKind;
+  /** Sweep only bounded adapter deposit change to the market's live Treasury. */
+  depositDustToTreasury?: boolean;
+  /** Optional reader for tests or custom transports; network enables the gRPC reader. */
+  pointConfigReader?: PointConfigReader;
+  transformSyOutput?: SyOutputTransform;
+  /** Compatibility flag for full-input simulation probes. Both modes use the
+   * original ABI; the deployed contract determines execution semantics. */
+  liquidityInputMode?: "partial" | "full";
+  observeFullLiquidity?: FullLiquidityObserver;
 };
 
 export type SwapSyForPtTxParams = {
@@ -60,22 +86,28 @@ export type DepositToSyTxParams = {
 };
 
 export type RedeemSyToUnderlyingTxParams = {
-  syCoinId: string;
+  syCoinId?: string;
   syCoinIds?: readonly string[];
   syAmount: bigint;
   senderAddress: string;
   syIndex?: bigint;
+  /** Append to an existing same-sender PTB for atomic portfolio actions. */
+  transaction?: Transaction;
 };
 
 export type QueueRedeemSyTxParams = {
-  syCoinId: string;
+  syCoinId?: string;
   syCoinIds?: readonly string[];
   syAmount: bigint;
+  minReceiptOut?: bigint;
+  /** Compatibility alias for minReceiptOut. The canonical field takes precedence. */
   minMarketCoinOut?: bigint;
   senderAddress: string;
+  transaction?: Transaction;
 };
 
 export type CancelQueuedRedeemSyTxParams = {
+  /** Integer queue ID from WithdrawQueuedEvent, not a Sui object ID. */
   requestId: string;
   senderAddress: string;
 };
@@ -84,6 +116,7 @@ export type ClaimYtInterestTxParams = {
   pyPositionId: string;
   senderAddress: string;
   syIndex?: bigint;
+  transaction?: Transaction;
 };
 
 export type PlaceBidOrderTxParams = {
@@ -114,7 +147,7 @@ export type ProductTxRewardSettlementParams = {
   /**
    * The SDK owns settlement composition for the market's bound RewardDistributor.
    * `empty-vector` means the caller is not injecting external settlements; it does
-   * not disable the core pool/YT/LP gate settlements required by MarketState.
+   * not disable the core pool/YT/LP gate settlements required by Market.
    */
   rewardSettlement: EmptyRewardSettlementStrategy;
 };
@@ -266,6 +299,8 @@ export type BuildAddLpKeepYtTxParams = ProductTxRewardSettlementParams & {
   inputAmount: bigint;
   syToMintHint: bigint;
   minLpOut: bigint;
+  /** Enforced atomically by the position YT-delta guard. */
+  minYtOut?: bigint;
   positionId?: string;
   deadlineMs?: bigint;
   syIndex?: bigint;
@@ -279,6 +314,7 @@ export type BuildAddLpKeepYtFromUnderlyingTxParams =
     underlyingAmount: bigint;
     syToMintHint: bigint;
     minLpOut: bigint;
+    minYtOut?: bigint;
     positionId?: string;
     deadlineMs?: bigint;
     syIndex?: bigint;
@@ -292,6 +328,7 @@ export type BuildAddLpKeepYtFromMarketCoinTxParams =
     marketCoinAmount: bigint;
     syToMintHint: bigint;
     minLpOut: bigint;
+    minYtOut?: bigint;
     positionId?: string;
     deadlineMs?: bigint;
     syIndex?: bigint;
@@ -374,7 +411,15 @@ export type BuildEnableReferralTxParams = {
   >;
 };
 
+export type BuildBindReferralTxParams = {
+  senderAddress: string;
+  positionId: string;
+  ytReferralRecordObjectIds?: Readonly<Record<string, string>>;
+  lpReferralRecordObjectIds?: Readonly<Record<string, string>>;
+};
+
 export type JitterTransactionService = {
+  buildBindReferralTx(params: BuildBindReferralTxParams): Promise<Transaction>;
   buildEnableReferralTx(params: BuildEnableReferralTxParams): Promise<Transaction>;
   buildBuyPtTx(params: BuildBuyPtTxParams): Promise<Transaction>;
   buildBuyPtFromUnderlyingTx(
@@ -385,6 +430,7 @@ export type JitterTransactionService = {
   ): Promise<Transaction>;
   buildSellPtTx(params: BuildSellPtTxParams): Promise<Transaction>;
   buildSellPtToUnderlyingTx(params: BuildSellPtToUnderlyingTxParams): Promise<Transaction>;
+  buildSellPtToReceiptTx(params: BuildSellPtToUnderlyingTxParams): Promise<Transaction>;
   buildBuyPtRouteTx(params: BuildBuyPtRouteTxParams): Promise<Transaction>;
   buildSellPtRouteTx(params: BuildSellPtRouteTxParams): Promise<Transaction>;
   buildBuyYtTx(params: BuildBuyYtTxParams): Promise<Transaction>;
@@ -399,6 +445,7 @@ export type JitterTransactionService = {
     params: BuildSellYtForExactSyTxParams,
   ): Promise<Transaction>;
   buildSellYtToUnderlyingTx(params: BuildSellYtToUnderlyingTxParams): Promise<Transaction>;
+  buildSellYtToReceiptTx(params: BuildSellYtToUnderlyingTxParams): Promise<Transaction>;
   buildAddLpTx(params: BuildAddLpTxParams): Promise<Transaction>;
   buildAddLpKeepYtTx(params: BuildAddLpKeepYtTxParams): Promise<Transaction>;
   buildAddLpKeepYtFromUnderlyingTx(
@@ -417,8 +464,10 @@ export type JitterTransactionService = {
   buildRemoveLpTx(params: BuildRemoveLpTxParams): Promise<Transaction>;
   buildRemoveLpToSyTx(params: BuildRemoveLpToSyTxParams): Promise<Transaction>;
   buildRemoveLpToUnderlyingTx(params: BuildRemoveLpToUnderlyingTxParams): Promise<Transaction>;
+  buildRemoveLpToReceiptTx(params: BuildRemoveLpToUnderlyingTxParams): Promise<Transaction>;
   buildDepositToSyTx(params: DepositToSyTxParams): Promise<Transaction>;
   buildRedeemSyToUnderlyingTx(params: RedeemSyToUnderlyingTxParams): Promise<Transaction>;
+  buildRedeemSyToReceiptTx(params: QueueRedeemSyTxParams): Transaction;
   buildQueueRedeemSyTx(params: QueueRedeemSyTxParams): Promise<Transaction>;
   buildCancelQueuedRedeemSyTx(
     params: CancelQueuedRedeemSyTxParams,
@@ -433,8 +482,69 @@ export type JitterTransactionService = {
 export function createJitterTransactionService(
   options: CreateJitterTransactionServiceOptions,
 ): JitterTransactionService {
+  const service = createResolvedTransactionService(options);
+  const reader = options.pointConfigReader ?? (options.network ? createPointConfigReader(options.network) : undefined);
+  if (!reader || !options.config.liquidlink) return service;
+  // Each async build gets its own fresh config snapshot, so concurrent builds cannot race.
+  return new Proxy(service, {
+    get(target, property, receiver) {
+      const method = Reflect.get(target, property, receiver);
+      if (typeof method !== "function" || property === "buildPlaceBidOrderTx"
+        || property === "buildClaimOrderTx" || property === "buildCancelOrderTx"
+        || property === "buildRedeemSyToReceiptTx" || property === "buildQueueRedeemSyTx"
+        || property === "buildCancelQueuedRedeemSyTx") return method;
+      return async (...args: unknown[]) => {
+        const config = await resolveLiquidlinkPointConfig(options.config, reader);
+        const resolved = createResolvedTransactionService({ ...options, config });
+        return Reflect.apply(Reflect.get(resolved, property), resolved, args);
+      };
+    },
+  });
+}
+
+function createResolvedTransactionService(
+  options: CreateJitterTransactionServiceOptions,
+): JitterTransactionService {
   const adapter = options.adapter ?? getJitterAdapterManifest(options.config);
+  const syOutputs = (tx: Transaction, ...coins: TransactionObjectArgument[]) =>
+    coins.flatMap(coin => {
+      const output = options.transformSyOutput ? options.transformSyOutput(tx, coin) : coin;
+      return output ? [output] : [];
+    });
+  const transferOutputs = (tx: Transaction, coins: TransactionObjectArgument[], owner: string) => {
+    if (coins.length > 0) tx.transferObjects(coins, tx.pure.address(owner));
+  };
   return {
+    async buildBindReferralTx(
+      params: BuildBindReferralTxParams,
+    ): Promise<Transaction> {
+      const ytRecords = Object.entries(params.ytReferralRecordObjectIds ?? {});
+      const lpRecords = Object.entries(params.lpReferralRecordObjectIds ?? {});
+      if (ytRecords.length === 0 && lpRecords.length === 0) {
+        throw new Error("Referral binding requires at least one existing record.");
+      }
+      const tx = newTransaction(options, params.senderAddress);
+      for (const [pointConfigObjectId, referralRecordObjectId] of ytRecords) {
+        addBindYtReferrerWithLiquidlinkPoints(
+          tx,
+          options.config,
+          pointConfigObjectId,
+          referralRecordObjectId,
+          params.positionId,
+        );
+      }
+      for (const [pointConfigObjectId, referralRecordObjectId] of lpRecords) {
+        addBindLpReferrerWithLiquidlinkPoints(
+          tx,
+          options.config,
+          pointConfigObjectId,
+          referralRecordObjectId,
+          params.positionId,
+        );
+      }
+      return tx;
+    },
+
     async buildEnableReferralTx(
       params: BuildEnableReferralTxParams,
     ): Promise<Transaction> {
@@ -497,8 +607,7 @@ export function createJitterTransactionService(
             params.positionId,
           );
           tx.moveCall({
-            target: "0x2::transfer::public_share_object",
-            typeArguments: [`${referralPackageId}::referral_policy::YtReferralRecord`],
+            target: `${referralPackageId}::referral_policy::share_yt_record`,
             arguments: [record],
           });
         }
@@ -510,8 +619,7 @@ export function createJitterTransactionService(
             params.positionId,
           );
           tx.moveCall({
-            target: "0x2::transfer::public_share_object",
-            typeArguments: [`${referralPackageId}::referral_policy::LpReferralRecord`],
+            target: `${referralPackageId}::referral_policy::share_lp_record`,
             arguments: [record],
           });
         }
@@ -536,10 +644,10 @@ export function createJitterTransactionService(
         position: position.argument,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
       });
       finishOrDestroyRewardOperations(tx, options.config, postOps, [REWARD_SCOPE_POOL]);
-      tx.transferObjects([syChange], tx.pure.address(params.senderAddress));
+      transferOutputs(tx, syOutputs(tx, syChange), params.senderAddress);
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
     },
@@ -560,6 +668,7 @@ export function createJitterTransactionService(
           underlyingCoinId: params.underlyingCoinId,
           underlyingCoinIds: params.underlyingCoinIds,
           underlyingAmount: params.underlyingAmount,
+          sweepDepositDust: options.depositDustToTreasury,
           syIndex,
         },
       );
@@ -570,12 +679,13 @@ export function createJitterTransactionService(
         position: position.argument,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
       });
       finishOrDestroyRewardOperations(tx, options.config, postOps, [REWARD_SCOPE_POOL]);
-      tx.transferObjects(
-        appendOptionalObject([syChange], excessCoin),
-        tx.pure.address(params.senderAddress),
+      transferOutputs(
+        tx,
+        appendOptionalObject(syOutputs(tx, syChange), excessCoin),
+        params.senderAddress,
       );
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
@@ -597,6 +707,7 @@ export function createJitterTransactionService(
           marketCoinId: params.marketCoinId,
           marketCoinIds: params.marketCoinIds,
           marketCoinAmount: params.marketCoinAmount,
+          sweepDepositDust: options.depositDustToTreasury,
           syIndex,
         },
       );
@@ -607,12 +718,13 @@ export function createJitterTransactionService(
         position: position.argument,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
       });
       finishOrDestroyRewardOperations(tx, options.config, postOps, [REWARD_SCOPE_POOL]);
-      tx.transferObjects(
-        appendOptionalObject([syChange], excessCoin),
-        tx.pure.address(params.senderAddress),
+      transferOutputs(
+        tx,
+        appendOptionalObject(syOutputs(tx, syChange), excessCoin),
+        params.senderAddress,
       );
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
@@ -629,10 +741,10 @@ export function createJitterTransactionService(
         positionId: params.positionId,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
       });
       finishOrDestroyRewardOperations(tx, options.config, postOps, [REWARD_SCOPE_POOL]);
-      tx.transferObjects([syCoin], tx.pure.address(params.senderAddress));
+      transferOutputs(tx, syOutputs(tx, syCoin), params.senderAddress);
       return tx;
     },
 
@@ -650,7 +762,7 @@ export function createJitterTransactionService(
         positionId: params.positionId,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
       });
       finishOrDestroyRewardOperations(tx, options.config, postOps, [REWARD_SCOPE_POOL]);
       const underlyingCoin = addRedeemSyCoinToUnderlying(
@@ -662,6 +774,22 @@ export function createJitterTransactionService(
         syIndex,
       );
       tx.transferObjects([underlyingCoin], tx.pure.address(params.senderAddress));
+      return tx;
+    },
+
+    async buildSellPtToReceiptTx(params: BuildSellPtToUnderlyingTxParams): Promise<Transaction> {
+      assertEmptyRewardSettlement(params.rewardSettlement);
+      const exit = resolveReceiptAdapter(options.config, adapter.kind);
+      const syIndex = await resolveSyIndex(options, params.syIndex);
+      const tx = newTransaction(options, params.senderAddress);
+      const priceInfo = adapter.addPriceInfo({ tx, config: options.config, syIndex });
+      const [syCoin, postOps] = addSellPt(tx, options.config, {
+        ptAmount: params.ptAmount, minSyOut: params.minSyOut, positionId: params.positionId,
+        ownerAddress: params.senderAddress, priceInfo, deadlineMs: resolveDeadlineMs(params.deadlineMs),
+      });
+      finishOrDestroyRewardOperations(tx, options.config, postOps, [REWARD_SCOPE_POOL]);
+      const receipt = addRedeemSyCoinToReceipt(tx, options.config, exit, syCoin, params.minSyOut);
+      tx.transferObjects([receipt], tx.pure.address(params.senderAddress));
       return tx;
     },
 
@@ -685,7 +813,7 @@ export function createJitterTransactionService(
         priceInfo,
       });
       destroyEmptyRewardOperations(tx, options.config, postOps);
-      tx.transferObjects([syChange], tx.pure.address(params.senderAddress));
+      transferOutputs(tx, syOutputs(tx, syChange), params.senderAddress);
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
     },
@@ -704,7 +832,7 @@ export function createJitterTransactionService(
         priceInfo,
       });
       destroyEmptyRewardOperations(tx, options.config, postOps);
-      tx.transferObjects([syCoin], tx.pure.address(params.senderAddress));
+      transferOutputs(tx, syOutputs(tx, syCoin), params.senderAddress);
       return tx;
     },
 
@@ -731,7 +859,7 @@ export function createJitterTransactionService(
         position: position.argument,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(
@@ -743,7 +871,7 @@ export function createJitterTransactionService(
         params.rewardSettlement.lpReferralRecordObjectIds,
         params.rewardSettlement.ytReferralRecordObjectIds,
       );
-      tx.transferObjects([syChange], tx.pure.address(params.senderAddress));
+      transferOutputs(tx, syOutputs(tx, syChange), params.senderAddress);
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
     },
@@ -764,6 +892,7 @@ export function createJitterTransactionService(
           underlyingCoinId: params.underlyingCoinId,
           underlyingCoinIds: params.underlyingCoinIds,
           underlyingAmount: params.underlyingAmount,
+          sweepDepositDust: options.depositDustToTreasury,
           syIndex,
         },
       );
@@ -780,7 +909,7 @@ export function createJitterTransactionService(
         position: position.argument,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(
@@ -792,9 +921,10 @@ export function createJitterTransactionService(
         params.rewardSettlement.lpReferralRecordObjectIds,
         params.rewardSettlement.ytReferralRecordObjectIds,
       );
-      tx.transferObjects(
-        appendOptionalObject([syChange], excessCoin),
-        tx.pure.address(params.senderAddress),
+      transferOutputs(
+        tx,
+        appendOptionalObject(syOutputs(tx, syChange), excessCoin),
+        params.senderAddress,
       );
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
@@ -816,6 +946,7 @@ export function createJitterTransactionService(
           marketCoinId: params.marketCoinId,
           marketCoinIds: params.marketCoinIds,
           marketCoinAmount: params.marketCoinAmount,
+          sweepDepositDust: options.depositDustToTreasury,
           syIndex,
         },
       );
@@ -832,7 +963,7 @@ export function createJitterTransactionService(
         position: position.argument,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(
@@ -844,9 +975,10 @@ export function createJitterTransactionService(
         params.rewardSettlement.lpReferralRecordObjectIds,
         params.rewardSettlement.ytReferralRecordObjectIds,
       );
-      tx.transferObjects(
-        appendOptionalObject([syChange], excessCoin),
-        tx.pure.address(params.senderAddress),
+      transferOutputs(
+        tx,
+        appendOptionalObject(syOutputs(tx, syChange), excessCoin),
+        params.senderAddress,
       );
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
@@ -863,7 +995,7 @@ export function createJitterTransactionService(
         positionId: params.positionId,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(
@@ -875,7 +1007,7 @@ export function createJitterTransactionService(
         params.rewardSettlement.lpReferralRecordObjectIds,
         params.rewardSettlement.ytReferralRecordObjectIds,
       );
-      tx.transferObjects([syCoin], tx.pure.address(params.senderAddress));
+      transferOutputs(tx, syOutputs(tx, syCoin), params.senderAddress);
       return tx;
     },
 
@@ -893,7 +1025,7 @@ export function createJitterTransactionService(
         positionId: params.positionId,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(
@@ -917,6 +1049,23 @@ export function createJitterTransactionService(
       return tx;
     },
 
+    async buildSellYtToReceiptTx(params: BuildSellYtToUnderlyingTxParams): Promise<Transaction> {
+      assertEmptyRewardSettlement(params.rewardSettlement);
+      const exit = resolveReceiptAdapter(options.config, adapter.kind);
+      const syIndex = await resolveSyIndex(options, params.syIndex);
+      const tx = newTransaction(options, params.senderAddress);
+      const priceInfo = adapter.addPriceInfo({ tx, config: options.config, syIndex });
+      const [syCoin, postOps] = addSellYt(tx, options.config, {
+        ytAmount: params.ytAmount, minSyOut: params.minSyOut, positionId: params.positionId,
+        ownerAddress: params.senderAddress, priceInfo, deadlineMs: resolveDeadlineMs(params.deadlineMs), rewardSettlement: params.rewardSettlement,
+      });
+      finishOrDestroyRewardOperations(tx, options.config, postOps, [REWARD_SCOPE_POOL, REWARD_SCOPE_YT], params.positionId,
+        params.rewardSettlement.lpReferralRecordObjectIds, params.rewardSettlement.ytReferralRecordObjectIds);
+      const receipt = addRedeemSyCoinToReceipt(tx, options.config, exit, syCoin, params.minSyOut);
+      tx.transferObjects([receipt], tx.pure.address(params.senderAddress));
+      return tx;
+    },
+
     async buildAddLpTx(params: BuildAddLpTxParams): Promise<Transaction> {
       assertEmptyRewardSettlement(params.rewardSettlement);
       const syIndex = await resolveSyIndex(options, params.syIndex);
@@ -933,11 +1082,11 @@ export function createJitterTransactionService(
         positionId: params.positionId,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(tx, options.config, postOps, [REWARD_SCOPE_POOL, REWARD_SCOPE_LP], params.positionId, params.rewardSettlement.lpReferralRecordObjectIds);
-      tx.transferObjects([syChange], tx.pure.address(params.senderAddress));
+      transferOutputs(tx, syOutputs(tx, syChange), params.senderAddress);
       return tx;
     },
 
@@ -953,13 +1102,16 @@ export function createJitterTransactionService(
       });
       const priceInfo = adapter.addPriceInfo({ tx, config: options.config, syIndex });
       const [, , syChange, postOps] = addLpKeepYt(tx, options.config, {
+        fullInput: options.liquidityInputMode === "full",
+        observe: options.observeFullLiquidity,
+        minYtOut: params.minYtOut,
         syCoin,
         syToMintHint: params.syToMintHint,
         minLpOut: params.minLpOut,
         position: position.argument,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(
@@ -969,7 +1121,7 @@ export function createJitterTransactionService(
         params.rewardSettlement.lpReferralRecordObjectIds,
         params.rewardSettlement.ytReferralRecordObjectIds,
       );
-      tx.transferObjects([syChange], tx.pure.address(params.senderAddress));
+      transferOutputs(tx, syOutputs(tx, syChange), params.senderAddress);
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
     },
@@ -993,18 +1145,22 @@ export function createJitterTransactionService(
           underlyingCoinId: params.underlyingCoinId,
           underlyingCoinIds: params.underlyingCoinIds,
           underlyingAmount: params.underlyingAmount,
+          sweepDepositDust: options.depositDustToTreasury,
           syIndex,
         },
       );
       const priceInfo = adapter.addPriceInfo({ tx, config: options.config, syIndex });
       const [, , syChange, postOps] = addLpKeepYt(tx, options.config, {
+        fullInput: options.liquidityInputMode === "full",
+        observe: options.observeFullLiquidity,
+        minYtOut: params.minYtOut,
         syCoin,
         syToMintHint: params.syToMintHint,
         minLpOut: params.minLpOut,
         position: position.argument,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(
@@ -1014,9 +1170,10 @@ export function createJitterTransactionService(
         params.rewardSettlement.lpReferralRecordObjectIds,
         params.rewardSettlement.ytReferralRecordObjectIds,
       );
-      tx.transferObjects(
-        appendOptionalObject([syChange], excessCoin),
-        tx.pure.address(params.senderAddress),
+      transferOutputs(
+        tx,
+        appendOptionalObject(syOutputs(tx, syChange), excessCoin),
+        params.senderAddress,
       );
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
@@ -1038,7 +1195,7 @@ export function createJitterTransactionService(
           positionId: params.positionId,
           ownerAddress: params.senderAddress,
           priceInfo,
-          deadlineMs: params.deadlineMs ?? 0n,
+          deadlineMs: resolveDeadlineMs(params.deadlineMs),
           rewardSettlement: params.rewardSettlement,
         },
       );
@@ -1051,9 +1208,10 @@ export function createJitterTransactionService(
         params.rewardSettlement.lpReferralRecordObjectIds,
         params.rewardSettlement.ytReferralRecordObjectIds,
       );
-      tx.transferObjects(
-        [exactSyCoin, sySurplus],
-        tx.pure.address(params.senderAddress),
+      transferOutputs(
+        tx,
+        syOutputs(tx, exactSyCoin, sySurplus),
+        params.senderAddress,
       );
       return tx;
     },
@@ -1078,18 +1236,22 @@ export function createJitterTransactionService(
           marketCoinId: params.marketCoinId,
           marketCoinIds: params.marketCoinIds,
           marketCoinAmount: params.marketCoinAmount,
+          sweepDepositDust: options.depositDustToTreasury,
           syIndex,
         },
       );
       const priceInfo = adapter.addPriceInfo({ tx, config: options.config, syIndex });
       const [, , syChange, postOps] = addLpKeepYt(tx, options.config, {
+        fullInput: options.liquidityInputMode === "full",
+        observe: options.observeFullLiquidity,
+        minYtOut: params.minYtOut,
         syCoin,
         syToMintHint: params.syToMintHint,
         minLpOut: params.minLpOut,
         position: position.argument,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(
@@ -1099,9 +1261,10 @@ export function createJitterTransactionService(
         params.rewardSettlement.lpReferralRecordObjectIds,
         params.rewardSettlement.ytReferralRecordObjectIds,
       );
-      tx.transferObjects(
-        appendOptionalObject([syChange], excessCoin),
-        tx.pure.address(params.senderAddress),
+      transferOutputs(
+        tx,
+        appendOptionalObject(syOutputs(tx, syChange), excessCoin),
+        params.senderAddress,
       );
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
@@ -1119,6 +1282,8 @@ export function createJitterTransactionService(
       });
       const priceInfo = adapter.addPriceInfo({ tx, config: options.config, syIndex });
       const [, syChange, postOps] = addLpFromSy(tx, options.config, {
+        fullInput: options.liquidityInputMode === "full",
+        observe: options.observeFullLiquidity,
         syCoin,
         syToMintHint: params.syToMintHint,
         minLpOut: params.minLpOut,
@@ -1126,7 +1291,7 @@ export function createJitterTransactionService(
         position: position.argument,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(
@@ -1136,7 +1301,7 @@ export function createJitterTransactionService(
         params.rewardSettlement.lpReferralRecordObjectIds,
         params.rewardSettlement.ytReferralRecordObjectIds,
       );
-      tx.transferObjects([syChange], tx.pure.address(params.senderAddress));
+      transferOutputs(tx, syOutputs(tx, syChange), params.senderAddress);
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
     },
@@ -1160,11 +1325,14 @@ export function createJitterTransactionService(
           underlyingCoinId: params.underlyingCoinId,
           underlyingCoinIds: params.underlyingCoinIds,
           underlyingAmount: params.underlyingAmount,
+          sweepDepositDust: options.depositDustToTreasury,
           syIndex,
         },
       );
       const priceInfo = adapter.addPriceInfo({ tx, config: options.config, syIndex });
       const [, syChange, postOps] = addLpFromSy(tx, options.config, {
+        fullInput: options.liquidityInputMode === "full",
+        observe: options.observeFullLiquidity,
         syCoin,
         syToMintHint: params.syToMintHint,
         minLpOut: params.minLpOut,
@@ -1172,7 +1340,7 @@ export function createJitterTransactionService(
         position: position.argument,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(
@@ -1182,9 +1350,10 @@ export function createJitterTransactionService(
         params.rewardSettlement.lpReferralRecordObjectIds,
         params.rewardSettlement.ytReferralRecordObjectIds,
       );
-      tx.transferObjects(
-        appendOptionalObject([syChange], excessCoin),
-        tx.pure.address(params.senderAddress),
+      transferOutputs(
+        tx,
+        appendOptionalObject(syOutputs(tx, syChange), excessCoin),
+        params.senderAddress,
       );
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
@@ -1210,11 +1379,14 @@ export function createJitterTransactionService(
           marketCoinId: params.marketCoinId,
           marketCoinIds: params.marketCoinIds,
           marketCoinAmount: params.marketCoinAmount,
+          sweepDepositDust: options.depositDustToTreasury,
           syIndex,
         },
       );
       const priceInfo = adapter.addPriceInfo({ tx, config: options.config, syIndex });
       const [, syChange, postOps] = addLpFromSy(tx, options.config, {
+        fullInput: options.liquidityInputMode === "full",
+        observe: options.observeFullLiquidity,
         syCoin,
         syToMintHint: params.syToMintHint,
         minLpOut: params.minLpOut,
@@ -1222,7 +1394,7 @@ export function createJitterTransactionService(
         position: position.argument,
         ownerAddress: params.senderAddress,
         priceInfo,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(
@@ -1232,9 +1404,10 @@ export function createJitterTransactionService(
         params.rewardSettlement.lpReferralRecordObjectIds,
         params.rewardSettlement.ytReferralRecordObjectIds,
       );
-      tx.transferObjects(
-        appendOptionalObject([syChange], excessCoin),
-        tx.pure.address(params.senderAddress),
+      transferOutputs(
+        tx,
+        appendOptionalObject(syOutputs(tx, syChange), excessCoin),
+        params.senderAddress,
       );
       transferCreatedPosition(tx, options.config, position, params.senderAddress);
       return tx;
@@ -1249,11 +1422,11 @@ export function createJitterTransactionService(
         minPtOut: params.minPtOut,
         positionId: params.positionId,
         ownerAddress: params.senderAddress,
-        deadlineMs: params.deadlineMs ?? 0n,
+        deadlineMs: resolveDeadlineMs(params.deadlineMs),
         rewardSettlement: params.rewardSettlement,
       });
       finishOrDestroyRewardOperations(tx, options.config, postOps, [REWARD_SCOPE_POOL, REWARD_SCOPE_LP], params.positionId, params.rewardSettlement.lpReferralRecordObjectIds);
-      tx.transferObjects([syCoin], tx.pure.address(params.senderAddress));
+      transferOutputs(tx, syOutputs(tx, syCoin), params.senderAddress);
       return tx;
     },
 
@@ -1271,7 +1444,7 @@ export function createJitterTransactionService(
         params,
         syIndex,
       );
-      tx.transferObjects([syCoin], tx.pure.address(params.senderAddress));
+      transferOutputs(tx, syOutputs(tx, syCoin), params.senderAddress);
       return tx;
     },
 
@@ -1301,6 +1474,17 @@ export function createJitterTransactionService(
       return tx;
     },
 
+    async buildRemoveLpToReceiptTx(params: BuildRemoveLpToUnderlyingTxParams): Promise<Transaction> {
+      assertEmptyRewardSettlement(params.rewardSettlement);
+      const exit = resolveReceiptAdapter(options.config, adapter.kind);
+      const syIndex = params.route === "active-swap" ? await resolveSyIndex(options, params.syIndex) : params.syIndex;
+      const tx = newTransaction(options, params.senderAddress);
+      const syCoin = addRemoveLpToSy(tx, options.config, adapter, params, syIndex);
+      const receipt = addRedeemSyCoinToReceipt(tx, options.config, exit, syCoin, params.minTotalSyOut);
+      tx.transferObjects([receipt], tx.pure.address(params.senderAddress));
+      return tx;
+    },
+
     async buildDepositToSyTx(params: DepositToSyTxParams): Promise<Transaction> {
       if (!adapter.canDepositUnderlying) {
         throw new Error(
@@ -1315,7 +1499,7 @@ export function createJitterTransactionService(
       });
       if (adapter.addMintFromUnderlying) {
         if (params.minSyOut === undefined) throw new Error("Deposit-first settlement requires minSyOut.");
-        const syCoin = adapter.addMintFromUnderlying({ tx, config: options.config, inputCoin: underlyingCoin, minSyOut: params.minSyOut });
+        const syCoin = adapter.addMintFromUnderlying({ tx, config: options.config, inputCoin: underlyingCoin, minSyOut: params.minSyOut, sweepDepositDust: options.depositDustToTreasury });
         tx.transferObjects([syCoin], tx.pure.address(params.senderAddress));
         return tx;
       }
@@ -1332,6 +1516,7 @@ export function createJitterTransactionService(
         mintRequest,
         inputCoin: underlyingCoin,
         syAmount: params.underlyingAmount,
+        sweepDepositDust: options.depositDustToTreasury,
       });
       const transferObjects = depositResult.excessCoin
         ? [syCoin, depositResult.excessCoin]
@@ -1344,13 +1529,9 @@ export function createJitterTransactionService(
       params: RedeemSyToUnderlyingTxParams,
     ): Promise<Transaction> {
       assertDirectUnderlyingRedeem(adapter, "buildRedeemSyToUnderlyingTx");
-      const syIndex = await resolveSyIndex(options, params.syIndex);
-      const tx = newTransaction(options, params.senderAddress);
-      const syCoin = splitCoinFromIds(tx, {
-        primaryCoinId: params.syCoinId,
-        coinIds: params.syCoinIds,
-        amount: params.syAmount,
-      });
+      const syIndex = adapter.kind === "scallop" ? 0n : await resolveSyIndex(options, params.syIndex);
+      const tx = newTransaction(options, params.senderAddress, params.transaction);
+      const syCoin = portfolioSyInput(tx, options.config, params);
       const redeemResult = addRedeemSyCoinToUnderlying(
         tx,
         options.config,
@@ -1366,56 +1547,57 @@ export function createJitterTransactionService(
       return tx;
     },
 
+    /** Receipt-only exit. No upstream market, version or oracle query. */
+    buildRedeemSyToReceiptTx(params: QueueRedeemSyTxParams): Transaction {
+      const exit = resolveReceiptAdapter(options.config, adapter.kind);
+      const minimum = params.minReceiptOut ?? params.minMarketCoinOut ?? params.syAmount;
+      if (exit.kind !== "scallop" && (minimum < 0n || minimum > params.syAmount)) {
+        throw new Error("minReceiptOut must be between zero and syAmount for exact receipt exits.");
+      }
+      const tx = newTransaction(options, params.senderAddress, params.transaction);
+      const syCoin = portfolioSyInput(tx, options.config, params);
+      const receipt = exit.kind === "scallop"
+        ? addScallopRedeem(tx, { ...options.config, marketObjectId: marketStateObjectId(options.config) }, syCoin, minimum)
+        : addReceiptRedeem(tx, { ...options.config, marketObjectId: marketStateObjectId(options.config) }, syCoin, {
+          ...exit, kind: exit.kind,
+        });
+      tx.transferObjects([receipt], tx.pure.address(params.senderAddress));
+      return tx;
+    },
+
     async buildQueueRedeemSyTx(params: QueueRedeemSyTxParams): Promise<Transaction> {
-      assertScallopQueueRedeemSupported(options.config, adapter.kind);
-      const tx = newTransaction(options, params.senderAddress);
-      const syCoin = splitCoinFromIds(tx, {
-        primaryCoinId: params.syCoinId,
-        coinIds: params.syCoinIds,
-        amount: params.syAmount,
-      });
-      const request = tx.moveCall({
-        target: `${requireConfigValue(options.config.scallopAdapterPackageId, "scallopAdapterPackageId")}::scallop_market_vault::queue_redeem`,
+      const exit = resolveReceiptAdapter(options.config, adapter.kind);
+      const tx = newTransaction(options, params.senderAddress, params.transaction);
+      const syCoin = portfolioSyInput(tx, options.config, params);
+      tx.moveCall({
+        target: `${exit.packageId}::${exit.kind}_market_vault::queue_redeem`,
         arguments: [
           syCoin,
-          tx.pure.u64(params.minMarketCoinOut ?? 0n),
+          tx.pure.u64(params.minReceiptOut ?? params.minMarketCoinOut ?? 0n),
           tx.object(requireGlobalConfigObjectId(options.config)),
-          tx.object(requireConfigValue(options.config.scallopMarketVaultObjectId, "scallopMarketVaultObjectId")),
+          tx.object(exit.vaultObjectId),
           tx.object(marketStateObjectId(options.config)),
-          tx.object(requireConfigValue(options.config.scallopVersionObjectId, "scallopVersionObjectId")),
-          tx.object(requireConfigValue(options.config.scallopMarketObjectId, "scallopMarketObjectId")),
           tx.object.clock(),
         ],
-        typeArguments: [
-          options.config.underlyingTypeTag,
-          options.config.syTypeTag,
-          options.config.ptTypeTag,
-          options.config.ytTypeTag,
-        ],
-      }) as TransactionObjectArgument;
-      tx.transferObjects([request], tx.pure.address(params.senderAddress));
+        typeArguments: exit.typeArguments,
+      });
       return tx;
     },
 
     async buildCancelQueuedRedeemSyTx(
       params: CancelQueuedRedeemSyTxParams,
     ): Promise<Transaction> {
-      assertScallopQueueRedeemSupported(options.config, adapter.kind);
+      const exit = resolveReceiptAdapter(options.config, adapter.kind);
       const tx = newTransaction(options, params.senderAddress);
       const syCoin = tx.moveCall({
-        target: `${requireConfigValue(options.config.scallopAdapterPackageId, "scallopAdapterPackageId")}::scallop_market_vault::cancel_queued_redeem`,
+        target: `${exit.packageId}::${exit.kind}_market_vault::cancel_queued_redeem`,
         arguments: [
-          tx.object(params.requestId),
+          tx.pure.u64(BigInt(params.requestId)),
           tx.object(requireGlobalConfigObjectId(options.config)),
-          tx.object(requireConfigValue(options.config.scallopMarketVaultObjectId, "scallopMarketVaultObjectId")),
+          tx.object(exit.vaultObjectId),
           tx.object.clock(),
         ],
-        typeArguments: [
-          options.config.underlyingTypeTag,
-          options.config.syTypeTag,
-          options.config.ptTypeTag,
-          options.config.ytTypeTag,
-        ],
+        typeArguments: exit.typeArguments,
       }) as TransactionObjectArgument;
       tx.transferObjects([syCoin], tx.pure.address(params.senderAddress));
       return tx;
@@ -1436,7 +1618,7 @@ export function createJitterTransactionService(
         priceInfo,
         params.pyPositionId,
       );
-      tx.transferObjects([syChange], tx.pure.address(params.senderAddress));
+      transferOutputs(tx, syOutputs(tx, syChange), params.senderAddress);
       return tx;
     },
 
@@ -1444,7 +1626,7 @@ export function createJitterTransactionService(
       params: ClaimYtInterestTxParams,
     ): Promise<Transaction> {
       const syIndex = await resolveSyIndex(options, params.syIndex);
-      const tx = newTransaction(options, params.senderAddress);
+      const tx = newTransaction(options, params.senderAddress, params.transaction);
       const priceInfo = adapter.addPriceInfo({ tx, config: options.config, syIndex });
       const syCoin = addClaimYtInterest(
         tx,
@@ -1582,7 +1764,7 @@ function addBuyPtRoute(
   void tx;
   void config;
   void params;
-  throw new Error("Hybrid orderbook routes are experimental and are not exposed by the MarketState router.");
+  throw new Error("Hybrid orderbook routes are experimental and are not exposed by the Market router.");
 }
 
 function addSellPtRoute(
@@ -1600,7 +1782,7 @@ function addSellPtRoute(
   void tx;
   void config;
   void params;
-  throw new Error("Hybrid orderbook routes are experimental and are not exposed by the MarketState router.");
+  throw new Error("Hybrid orderbook routes are experimental and are not exposed by the Market router.");
 }
 
 function addBuyYt(
@@ -1799,10 +1981,25 @@ function addLp(
   ];
 }
 
+function observeFullLpInput(
+  tx: Transaction,
+  config: JitterMarketConfig,
+  params: { fullInput?: boolean; observe?: FullLiquidityObserver; syCoin: TransactionObjectArgument },
+): boolean {
+  if (!params.fullInput || !params.observe) return false;
+  tx.moveCall({ target: `${config.jitterPackageId}::market::total_accounted_sy`,
+    typeArguments: marketStateTypeArgs(config), arguments: [tx.object(marketStateObjectId(config))] });
+  tx.moveCall({ target: "0x2::coin::value", typeArguments: [config.syTypeTag], arguments: [params.syCoin] });
+  return true;
+}
+
 function addLpKeepYt(
   tx: Transaction,
   config: JitterMarketConfig,
   params: {
+    fullInput?: boolean;
+    observe?: FullLiquidityObserver;
+    minYtOut?: bigint;
     syCoin: TransactionObjectArgument;
     syToMintHint: bigint;
     minLpOut: bigint;
@@ -1829,6 +2026,10 @@ function addLpKeepYt(
     params.ownerAddress,
     params.rewardSettlement.lpReferralRecordObjectIds,
   );
+  const initialYt = (params.minYtOut ?? 0n) > 0n ? tx.moveCall({
+    target: `${config.jitterPackageId}::jitter_position::yt_balance`, arguments: [position],
+  }) : undefined;
+  const observed = observeFullLpInput(tx, config, params);
   const result = tx.moveCall({
     target: `${config.jitterPackageId}::router::add_lp_keep_yt`,
     arguments: [
@@ -1848,6 +2049,13 @@ function addLpKeepYt(
     ],
     typeArguments: marketStateTypeArgs(config),
   });
+  if (observed) params.observe?.(tx, {
+    refundSy: result[2] as TransactionObjectArgument, keepYt: true,
+  });
+  if (initialYt) tx.moveCall({
+    target: `${config.jitterPackageId}::router::assert_yt_delta_at_least`,
+    arguments: [tx.object(requireGlobalConfigObjectId(config)), position, initialYt, tx.pure.u64(params.minYtOut!)],
+  });
   return [
     result[0] as TransactionArgument,
     result[1] as TransactionArgument,
@@ -1860,6 +2068,8 @@ function addLpFromSy(
   tx: Transaction,
   config: JitterMarketConfig,
   params: {
+    fullInput?: boolean;
+    observe?: FullLiquidityObserver;
     syCoin: TransactionObjectArgument;
     syToMintHint: bigint;
     minLpOut: bigint;
@@ -1887,6 +2097,7 @@ function addLpFromSy(
     params.ownerAddress,
     params.rewardSettlement.lpReferralRecordObjectIds,
   );
+  const observed = observeFullLpInput(tx, config, params);
   const result = tx.moveCall({
     target: `${config.jitterPackageId}::router::add_lp_from_sy`,
     arguments: [
@@ -1906,6 +2117,9 @@ function addLpFromSy(
       tx.object.clock(),
     ],
     typeArguments: marketStateTypeArgs(config),
+  });
+  if (observed) params.observe?.(tx, {
+    refundSy: result[1] as TransactionObjectArgument, keepYt: false,
   });
   return [
     result[0] as TransactionArgument,
@@ -1973,7 +2187,7 @@ function addRemoveLpToSy(
     minPtOut: params.minPtOut,
     positionId: params.positionId,
     ownerAddress: params.senderAddress,
-    deadlineMs: params.deadlineMs ?? 0n,
+    deadlineMs: resolveDeadlineMs(params.deadlineMs),
     rewardSettlement: params.rewardSettlement,
   });
   finishOrDestroyRewardOperations(
@@ -2000,7 +2214,7 @@ function addRemoveLpToSy(
       positionId: params.positionId,
       ownerAddress: params.senderAddress,
       priceInfo,
-      deadlineMs: params.deadlineMs ?? 0n,
+      deadlineMs: resolveDeadlineMs(params.deadlineMs),
     });
     finishOrDestroyRewardOperations(
       tx,
@@ -2011,7 +2225,7 @@ function addRemoveLpToSy(
     convertedSyCoin = swappedSyCoin;
   } else if (params.route === "settled-redeem") {
     convertedSyCoin = tx.moveCall({
-      target: `${config.jitterPackageId}::router::redeem_market_state_after_expiry`,
+      target: `${config.jitterPackageId}::router::redeem_pt_after_expiry`,
       arguments: [
         ptAmount,
         tx.object(params.positionId),
@@ -2046,6 +2260,7 @@ function addSyFromUnderlyingExactIn(
     underlyingCoinId?: string;
     underlyingCoinIds?: readonly string[];
     underlyingAmount: bigint;
+    sweepDepositDust?: boolean;
     syIndex: bigint;
   },
 ): {
@@ -2055,7 +2270,7 @@ function addSyFromUnderlyingExactIn(
   const underlyingCoin = splitUnderlyingCoinExactIn(tx, config, params);
   if (adapter.addMintFromUnderlying) {
     // Product routes enforce their final PT/YT/LP minimum output after conversion.
-    return { syCoin: adapter.addMintFromUnderlying({ tx, config, inputCoin: underlyingCoin, minSyOut: 1n }) };
+    return { syCoin: adapter.addMintFromUnderlying({ tx, config, inputCoin: underlyingCoin, minSyOut: 1n, sweepDepositDust: params.sweepDepositDust }) };
   }
   const priceInfo = adapter.addPriceInfo({ tx, config, syIndex: params.syIndex });
   const [syCoin, mintRequest] = addMintSyExactIn(
@@ -2070,6 +2285,7 @@ function addSyFromUnderlyingExactIn(
     mintRequest,
     inputCoin: underlyingCoin,
     syAmount: params.underlyingAmount,
+    sweepDepositDust: params.sweepDepositDust,
   });
   return {
     syCoin,
@@ -2085,6 +2301,7 @@ function addSyFromScallopMarketCoinExactIn(
     marketCoinId?: string;
     marketCoinIds?: readonly string[];
     marketCoinAmount: bigint;
+    sweepDepositDust?: boolean;
     syIndex: bigint;
   },
 ): {
@@ -2097,6 +2314,16 @@ function addSyFromScallopMarketCoinExactIn(
     coinIds: params.marketCoinIds,
     amount: params.marketCoinAmount,
   });
+  if (adapter.kind === "haedal" || adapter.kind === "ember") {
+    const { syCoin, receiptChange } = (adapter.kind==='ember'?addEmberMintReceiptToSy:addHaedalMintReceiptToSy)(tx, config, marketCoin, 1n);
+    if (params.sweepDepositDust) {
+      const type = adapter.kind === "haedal" ? HAEDAL_RECEIPT_TYPE : config.emberReceiptTypeTag;
+      if (!type) throw new Error("Missing emberReceiptTypeTag for deposit dust.");
+      addDepositDustToTreasury(tx, config, receiptChange, type);
+      return { syCoin };
+    }
+    return { syCoin, excessCoin: receiptChange };
+  }
   const underlyingValue = marketCoinToUnderlyingFloor(
     params.marketCoinAmount,
     params.syIndex,
@@ -2115,6 +2342,11 @@ function addSyFromScallopMarketCoinExactIn(
     marketCoin,
     params.marketCoinAmount,
   );
+  if (params.sweepDepositDust) {
+    if (!config.scallopMarketCoinTypeTag) throw new Error("Missing scallopMarketCoinTypeTag for deposit dust.");
+    addDepositDustToTreasury(tx, config, excessCoin, config.scallopMarketCoinTypeTag);
+    return { syCoin };
+  }
   return { syCoin, excessCoin };
 }
 
@@ -2127,22 +2359,19 @@ function splitUnderlyingCoinExactIn(
     underlyingAmount: bigint;
   },
 ): TransactionObjectArgument {
-  if (config.underlyingTypeTag === SUI_TYPE_TAG) {
+  if (normalizeStructTag(config.underlyingTypeTag) === normalizeStructTag(SUI_TYPE_TAG)) {
     return tx.coin({ balance: params.underlyingAmount });
   }
 
+  if (!params.underlyingCoinId && !params.underlyingCoinIds?.length) {
+    return tx.coin({ type: config.underlyingTypeTag, balance: params.underlyingAmount, useGasCoin: false });
+  }
+
   return splitCoinFromIds(tx, {
-    primaryCoinId: requireUnderlyingCoinId(params.underlyingCoinId),
+    primaryCoinId: params.underlyingCoinId ?? params.underlyingCoinIds![0]!,
     coinIds: params.underlyingCoinIds,
     amount: params.underlyingAmount,
   });
-}
-
-function requireUnderlyingCoinId(coinId: string | undefined): string {
-  if (!coinId) {
-    throw new Error("underlyingCoinId is required for non-SUI underlying inputs.");
-  }
-  return coinId;
 }
 
 function requireMarketCoinId(coinId: string | undefined): string {
@@ -2278,7 +2507,7 @@ function transferCreatedPosition(
     REWARD_SCOPE_LP,
   );
   tx.moveCall({
-    target: `${config.jitterPackageId}::router::transfer_market_state_position_after_reward_settlement`,
+    target: `${config.jitterPackageId}::router::transfer_position`,
     arguments: [
       ytSettlements,
       lpSettlements,
@@ -2319,7 +2548,7 @@ type RewardScope =
   | typeof REWARD_SCOPE_POOL;
 
 function shouldUseCoreRewardSettlements(config: JitterMarketConfig): boolean {
-  // MarketState gates mutations as soon as a canonical RewardDistributor is
+  // Market gates mutations as soon as a canonical RewardDistributor is
   // bound, even when that distributor currently has no Point/Coin rewarders.
   // Mirror that topology here; reward-program configuration only controls
   // which rewarder-specific settlement calls are appended to the operation.
@@ -2368,8 +2597,10 @@ function settleRewardOperation(
   lpReferralRecordObjectIds: Readonly<Record<string, string>> = {},
   ytReferralRecordObjectIds: Readonly<Record<string, string>> = {},
 ): void {
+  const hasPointObligations = config.liquidlink?.enabled || config.liquidlink?.closed
+    || config.liquidlink?.pointPrograms?.some(program => program.closed);
   if (scope === REWARD_SCOPE_POOL) {
-    if (config.liquidlink?.enabled) {
+    if (hasPointObligations) {
       addSettlePoolRewardOperationWithLiquidlinkPoints(tx, config, operation);
     }
     return;
@@ -2380,7 +2611,7 @@ function settleRewardOperation(
   }
 
   if (scope === REWARD_SCOPE_YT) {
-    if (config.liquidlink?.enabled) {
+    if (hasPointObligations) {
       addSettleYtRewardOperationWithLiquidlinkPoints(
         tx,
         config,
@@ -2395,7 +2626,7 @@ function settleRewardOperation(
     return;
   }
 
-  if (config.liquidlink?.enabled) {
+  if (hasPointObligations) {
     addSettleLpRewardOperationWithLiquidlinkPoints(
       tx,
       config,
@@ -2455,12 +2686,12 @@ function poolRewardSettlementVector(
     return emptyRewardSettlementVector(tx, config);
   }
   const exposure = tx.moveCall({
-    target: `${config.jitterPackageId}::market_state::total_pool_sy`,
+    target: `${config.jitterPackageId}::market::total_pool_sy`,
     arguments: [tx.object(marketStateObjectId(config))],
     typeArguments: marketStateTypeArgs(config),
   }) as TransactionArgument;
   const guard = tx.moveCall({
-    target: `${config.jitterPackageId}::market_state::pool_reward_guard`,
+    target: `${config.jitterPackageId}::market::pool_reward_guard`,
     arguments: [tx.object(marketStateObjectId(config))],
     typeArguments: marketStateTypeArgs(config),
   }) as TransactionArgument;
@@ -2669,24 +2900,13 @@ function assertScallopMarketCoinDeposit(
   adapter: JitterAdapterManifest,
   builderName: string,
 ): void {
+  if (adapter.kind === "haedal" && config.haedalStakingObjectId) return;
+  if (adapter.kind === "ember" && config.emberReceiptTypeTag && config.emberVaultObjectId) return;
   if (adapter.kind !== "scallop" || !config.scallopMarketCoinTypeTag) {
     throw new Error(
       `${builderName} requires a Scallop market with scallopMarketCoinTypeTag configured.`,
     );
   }
-}
-
-function assertScallopQueueRedeemSupported(
-  config: JitterMarketConfig,
-  adapterKind: JitterAdapterManifest["kind"],
-): void {
-  if (adapterKind !== "scallop") {
-    throw new Error("Queued SY redemption is only supported by the Scallop adapter.");
-  }
-  requireConfigValue(config.scallopAdapterPackageId, "scallopAdapterPackageId");
-  requireConfigValue(config.scallopMarketVaultObjectId, "scallopMarketVaultObjectId");
-  requireConfigValue(config.scallopVersionObjectId, "scallopVersionObjectId");
-  requireConfigValue(config.scallopMarketObjectId, "scallopMarketObjectId");
 }
 
 function addRedeemSyCoinToUnderlying(
@@ -2697,14 +2917,22 @@ function addRedeemSyCoinToUnderlying(
   minSyAmount: bigint,
   syIndex: bigint,
 ): TransactionObjectArgument {
-  const priceInfo = adapter.addPriceInfo({ tx, config, syIndex });
-  const burnRequest = addBurnSyExactIn(tx, config, priceInfo, syCoin);
+  const input = adapter.kind === "scallop"
+    ? syCoin
+    : addBurnSyExactIn(tx, config, adapter.addPriceInfo({ tx, config, syIndex }), syCoin);
   return adapter.addRedeemFromSy({
     tx,
     config,
-    burnRequest,
+    input,
     syAmount: minSyAmount,
   }).outputCoin;
+}
+
+function addRedeemSyCoinToReceipt(tx: Transaction, config: JitterMarketConfig,
+  exit: ReturnType<typeof resolveReceiptAdapter>, syCoin: TransactionObjectArgument, minimum: bigint): TransactionObjectArgument {
+  return exit.kind === "scallop"
+    ? addScallopRedeem(tx, config, syCoin, minimum)
+    : addReceiptRedeem(tx, config, syCoin, { ...exit, kind: exit.kind });
 }
 
 function requireRewardDistributorObjectId(config: JitterMarketConfig): string {
@@ -2755,13 +2983,27 @@ function orderIdsArg(
 function newTransaction(
   options: CreateJitterTransactionServiceOptions,
   senderAddress: string,
+  transaction?: Transaction,
 ): Transaction {
-  const tx = new Transaction();
+  const tx = transaction ?? new Transaction();
+  const sender = tx.getData().sender;
+  if (sender && normalizeSuiAddress(sender) !== normalizeSuiAddress(senderAddress)) {
+    throw new Error("Cannot compose transactions for a different sender.");
+  }
   tx.setSender(senderAddress);
   if (options.gasBudget !== undefined) {
     tx.setGasBudget(options.gasBudget);
   }
   return tx;
+}
+
+function portfolioSyInput(tx: Transaction, config: JitterMarketConfig, params: QueueRedeemSyTxParams) {
+  if (params.syAmount <= 0n || params.syAmount > (1n << 64n) - 1n) {
+    throw new Error("SY amount must be a positive u64.");
+  }
+  return params.syCoinId
+    ? splitCoinFromIds(tx, { primaryCoinId: params.syCoinId, coinIds: params.syCoinIds, amount: params.syAmount })
+    : tx.coin({ type: config.syTypeTag, balance: params.syAmount });
 }
 
 async function resolveSyIndex(
@@ -2770,9 +3012,18 @@ async function resolveSyIndex(
 ): Promise<bigint> {
   if (override !== undefined) return override;
   if (options.resolveSyIndex) return options.resolveSyIndex();
+  if(options.config.emberAdapterPackageId){
+    if(options.network)return (await getEmberDepositQuote(options.network,options.config,0n)).syIndex;
+    throw Error('Ember transaction hints require syIndex, resolveSyIndex or network.');
+  }
+  if (options.config.haedalAdapterPackageId) {
+    if (options.network) return (await getHaedalStakeQuote(options.network, options.config, 0n)).syIndex;
+    throw new Error("Haedal transaction hints require syIndex, resolveSyIndex or network.");
+  }
   if (options.config.adapterKind === "current" || options.config.currentAdapterPackageId) {
     throw new Error("Current transaction hints require syIndex or resolveSyIndex; a demo index is not valid.");
   }
   return DEFAULT_DEMO_SY_INDEX;
 }
 
+import { resolveDeadlineMs } from "../domain/deadline.js";

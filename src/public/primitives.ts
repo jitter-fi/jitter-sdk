@@ -1,5 +1,7 @@
 /** Primitive PTB builders and adapter/reward helpers. */
+export { addCloseReferralCampaign, type CloseReferralCampaignArgs } from "../referral.js";
 export { addCurrentDepositToSy, addCurrentPriceInfo, addCurrentRedeem } from "../adapters/current.js";
+export { addHaedalPriceInfo, addHaedalStake, addHaedalMintReceiptToSy, getHaedalStakeQuote, HAEDAL_RECEIPT_TYPE } from "../adapters/haedal.js";
 
 // ---------------------------------------------------------------------------
 // Re-exports (primitive layer)
@@ -23,10 +25,13 @@ export {
   addEmberPriceInfo,
   addSuilendPriceInfo,
   addNaviPriceInfo,
+  addNaviOracleRefresh,
+  type NaviOracleRefreshConfig,
 } from "../oracle.js";
 export {
   addMintSyExactIn,
   addBurnSyExactIn,
+  addReceiptRedeem,
   addDemoDeposit,
   addDemoRedeem,
   addScallopMintMarketCoin,
@@ -36,6 +41,8 @@ export {
   addScallopRedeemMarketCoinToUnderlying,
   addScallopRedeemToUnderlying,
   addEmberDeposit,
+  addHaedalDeposit,
+  type HaedalDepositConfig,
   addEmberDepositFromUnderlying,
   addEmberMintReceiptFromUnderlying,
   addEmberRedeem,
@@ -77,9 +84,13 @@ export {
 } from "../orderbook.js";
 export type { OrderbookAsset } from "../orderbook.js";
 export {
+  addCheckpointClosedPoints,
+  addClaimClosedPoints,
+  addClaimArchivedReferral,
   addCheckpointLpPointConfigToVersion,
   addCheckpointYtPointConfigToVersion,
   addClaimLpPointsWithLiquidlinkPoints,
+  addDetachLpReferralWithLiquidlinkPoints,
   addClaimYtInterestWithLiquidlinkPoints,
   addHybridSwapPtForSyWithLiquidlinkPoints,
   addHybridSwapSyForPtWithLiquidlinkPoints,
@@ -107,6 +118,8 @@ export {
   nextLiquidlinkPointCheckpointTarget,
 } from "../liquidlink-points.js";
 export type {
+  ClosedPointClaimPolicies,
+  LpReferralDetachPolicies,
   LiquidlinkPointCheckpointScope,
   LiquidlinkPointCheckpointVersion,
 } from "../liquidlink-points.js";

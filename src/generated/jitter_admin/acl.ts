@@ -18,6 +18,9 @@ export const ACL = new MoveStruct({ name: `${$moduleName}::ACL`, fields: {
         role_operation_counts: table_3.Table,
         deleted_role_ids: vec_set.VecSet(bcs.u8())
     } });
+export const AclCreatedEvent = new MoveStruct({ name: `${$moduleName}::AclCreatedEvent`, fields: {
+        acl_id: bcs.Address
+    } });
 export const RoleGrantedEvent = new MoveStruct({ name: `${$moduleName}::RoleGrantedEvent`, fields: {
         account: bcs.Address,
         role: bcs.u8()

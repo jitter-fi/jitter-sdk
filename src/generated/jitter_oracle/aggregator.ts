@@ -9,8 +9,9 @@ import { MoveStruct, normalizeMoveArguments, type RawTransactionArgument } from 
 import { bcs } from '@mysten/sui/bcs';
 import { type Transaction } from '@mysten/sui/transactions';
 import * as type_name from './deps/std/type_name.js';
-import * as vec_map from './deps/sui/vec_map.js';
 import * as type_name_1 from './deps/std/type_name.js';
+import * as vec_map from './deps/sui/vec_map.js';
+import * as type_name_2 from './deps/std/type_name.js';
 const $moduleName = 'jitter/jitter-oracle::aggregator';
 export const SourceRule = new MoveStruct({ name: `${$moduleName}::SourceRule`, fields: {
         weight_bps: bcs.u16(),
@@ -48,12 +49,20 @@ export const PriceAggregatedEvent = new MoveStruct({ name: `${$moduleName}::Pric
         sy_index: bcs.u128(),
         updated_at: bcs.u64()
     } });
+export const SourceRuleRemovedEvent = new MoveStruct({ name: `${$moduleName}::SourceRuleRemovedEvent`, fields: {
+        aggregator_id: bcs.Address,
+        market_id: bcs.Address,
+        source_type: type_name_1.TypeName,
+        weight_bps: bcs.u16(),
+        required: bcs.bool(),
+        enabled: bcs.bool()
+    } });
 export const PriceAggregator = new MoveStruct({ name: `${$moduleName}::PriceAggregator<phantom SY>`, fields: {
         id: bcs.Address,
         market_id: bcs.Address,
         enabled: bcs.bool(),
         max_staleness_ms: bcs.u64(),
-        source_rules: vec_map.VecMap(type_name_1.TypeName, SourceRule),
+        source_rules: vec_map.VecMap(type_name_2.TypeName, SourceRule),
         min_total_weight_bps: bcs.u64(),
         min_source_count: bcs.u64(),
         outlier_tolerance_bps: bcs.u64()

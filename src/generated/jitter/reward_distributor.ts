@@ -6,8 +6,8 @@
 /**
  * Market-scoped reward coordination.
  *
- * Every distributor belongs to exactly one MarketState. Rewarders are grouped by
- * scope and must settle their own ID before a mutation or transfer can consume the
+ * Every distributor belongs to exactly one Market. Rewarders are grouped by scope
+ * and must settle their own ID before a mutation or transfer can consume the
  * hot-potato operation.
  */
 
@@ -115,6 +115,17 @@ export const RewardOperationFinishedEvent = new MoveStruct({ name: `${$moduleNam
         subject_id: bcs.Address,
         previous_exposure: bcs.u64()
     } });
+export const RewardSettlementPreparedEvent = new MoveStruct({ name: `${$moduleName}::RewardSettlementPreparedEvent`, fields: {
+        distributor_id: bcs.Address,
+        market_state_id: bcs.Address,
+        scope: bcs.u8(),
+        operation_kind: bcs.u8(),
+        config_version: bcs.u64(),
+        declared_owner: bcs.Address,
+        declared_next_owner: bcs.Address,
+        declared_subject_id: bcs.Address,
+        declared_previous_exposure: bcs.u64()
+    } });
 export interface SetEnabledByAdminArguments {
     distributor: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
@@ -146,80 +157,6 @@ export function setEnabledByAdmin(options: SetEnabledByAdminOptions) {
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
-export interface RegisterRewarderByAdminArguments {
-    distributor: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    scope: RawTransactionArgument<number>;
-    rewarderId: RawTransactionArgument<string>;
-}
-export interface RegisterRewarderByAdminOptions {
-    package?: string;
-    arguments: RegisterRewarderByAdminArguments | [
-        distributor: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        scope: RawTransactionArgument<number>,
-        rewarderId: RawTransactionArgument<string>
-    ];
-}
-export function registerRewarderByAdmin(options: RegisterRewarderByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        'u8',
-        '0x2::object::ID'
-    ] satisfies (string | null)[];
-    const parameterNames = ["distributor", "globalConfig", "AdminCap", "scope", "rewarderId"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'reward_distributor',
-        function: 'register_rewarder_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
-export interface RegisterRewarderWithMetadataByAdminArguments {
-    distributor: RawTransactionArgument<string>;
-    globalConfig: RawTransactionArgument<string>;
-    AdminCap: RawTransactionArgument<string>;
-    scope: RawTransactionArgument<number>;
-    rewarderId: RawTransactionArgument<string>;
-    kind: RawTransactionArgument<Array<number>>;
-    label: RawTransactionArgument<Array<number>>;
-}
-export interface RegisterRewarderWithMetadataByAdminOptions {
-    package?: string;
-    arguments: RegisterRewarderWithMetadataByAdminArguments | [
-        distributor: RawTransactionArgument<string>,
-        globalConfig: RawTransactionArgument<string>,
-        AdminCap: RawTransactionArgument<string>,
-        scope: RawTransactionArgument<number>,
-        rewarderId: RawTransactionArgument<string>,
-        kind: RawTransactionArgument<Array<number>>,
-        label: RawTransactionArgument<Array<number>>
-    ];
-}
-export function registerRewarderWithMetadataByAdmin(options: RegisterRewarderWithMetadataByAdminOptions) {
-    const packageAddress = options.package ?? 'jitter/jitter';
-    const argumentsTypes = [
-        null,
-        null,
-        null,
-        'u8',
-        '0x2::object::ID',
-        'vector<u8>',
-        'vector<u8>'
-    ] satisfies (string | null)[];
-    const parameterNames = ["distributor", "globalConfig", "AdminCap", "scope", "rewarderId", "kind", "label"];
-    return (tx: Transaction) => tx.moveCall({
-        package: packageAddress,
-        module: 'reward_distributor',
-        function: 'register_rewarder_with_metadata_by_admin',
-        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
-    });
-}
 export interface RegisterRewarderWithSettlementCapByAdminArguments {
     distributor: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
@@ -241,6 +178,10 @@ export interface RegisterRewarderWithSettlementCapByAdminOptions {
         label: RawTransactionArgument<Array<number>>
     ];
 }
+/**
+ * Registration and settlement authority are issued atomically. The integrating
+ * module must retain the cap and enforce its own accounting before retirement.
+ */
 export function registerRewarderWithSettlementCapByAdmin(options: RegisterRewarderWithSettlementCapByAdminOptions) {
     const packageAddress = options.package ?? 'jitter/jitter';
     const argumentsTypes = [
@@ -264,8 +205,7 @@ export interface UnregisterRewarderByAdminArguments {
     distributor: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
     AdminCap: RawTransactionArgument<string>;
-    scope: RawTransactionArgument<number>;
-    rewarderId: RawTransactionArgument<string>;
+    cap: RawTransactionArgument<string>;
 }
 export interface UnregisterRewarderByAdminOptions {
     package?: string;
@@ -273,20 +213,22 @@ export interface UnregisterRewarderByAdminOptions {
         distributor: RawTransactionArgument<string>,
         globalConfig: RawTransactionArgument<string>,
         AdminCap: RawTransactionArgument<string>,
-        scope: RawTransactionArgument<number>,
-        rewarderId: RawTransactionArgument<string>
+        cap: RawTransactionArgument<string>
     ];
 }
+/**
+ * Only the cap's custodian can retire its registration. An AdminCap plus a
+ * rewarder ID cannot bypass the rewarder's historical-liability checks.
+ */
 export function unregisterRewarderByAdmin(options: UnregisterRewarderByAdminOptions) {
     const packageAddress = options.package ?? 'jitter/jitter';
     const argumentsTypes = [
         null,
         null,
         null,
-        'u8',
-        '0x2::object::ID'
+        null
     ] satisfies (string | null)[];
-    const parameterNames = ["distributor", "globalConfig", "AdminCap", "scope", "rewarderId"];
+    const parameterNames = ["distributor", "globalConfig", "AdminCap", "cap"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'reward_distributor',

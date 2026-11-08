@@ -9,10 +9,10 @@ import type {
 } from "@mysten/sui/transactions";
 
 import {
-  createMarketStatePosition,
+  createPosition,
   mintPy,
   redeemPy,
-  redeemMarketStateAfterExpiry,
+  redeemPtAfterExpiry,
 } from "./generated/jitter/router.js";
 
 import type { JitterMarketConfig } from "./types.js";
@@ -57,7 +57,7 @@ export function addCreatePyPosition(
   tx: Transaction,
   config: JitterMarketConfig,
 ): TransactionObjectArgument {
-  return createMarketStatePosition({
+  return createPosition({
     package: config.jitterPackageId,
     arguments: [marketStateId(config), requireGlobalConfig(config)],
     typeArguments: marketStateTypeArgs(config),
@@ -68,7 +68,7 @@ export function addCreateLpPosition(
   tx: Transaction,
   config: JitterMarketConfig,
 ): TransactionObjectArgument {
-  return createMarketStatePosition({
+  return createPosition({
     package: config.jitterPackageId,
     arguments: [marketStateId(config), requireGlobalConfig(config)],
     typeArguments: marketStateTypeArgs(config),
@@ -79,7 +79,7 @@ export function addCreatePosition(
   tx: Transaction,
   config: JitterMarketConfig,
 ): TransactionObjectArgument {
-  return createMarketStatePosition({
+  return createPosition({
     package: config.jitterPackageId,
     arguments: [marketStateId(config), requireGlobalConfig(config)],
     typeArguments: marketStateTypeArgs(config),
@@ -154,7 +154,7 @@ export function addRedeemAfterExpiry(
   ptAmount: bigint,
   pyPosition: TransactionObjectArgument | string,
 ): TransactionObjectArgument {
-  return redeemMarketStateAfterExpiry({
+  return redeemPtAfterExpiry({
     package: config.jitterPackageId,
     arguments: [
       ptAmount,
@@ -180,7 +180,7 @@ export function addClaimYtInterest(
     arguments: [priceInfo],
   });
   return tx.moveCall({
-    target: `${config.jitterPackageId}::router::claim_market_state_yt_interest`,
+    target: `${config.jitterPackageId}::router::claim_yt_interest`,
     arguments: [
       priceInfoOption,
       typeof pyPosition === "string" ? tx.object(pyPosition) : pyPosition,

@@ -69,7 +69,7 @@ function addTransferPosition(
   recipient: string,
 ): void {
   tx.moveCall({
-    target: `${config.jitterPackageId}::router::transfer_position`,
+    target: `${config.jitterPackageId}::router::transfer_empty_position`,
     arguments: [position, tx.pure.address(recipient)],
   });
 }
@@ -352,12 +352,13 @@ export function buildRedeemSyToUnderlyingTx(
     );
   }
   const syCoin = tx.splitCoins(tx.object(syCoinId), [tx.pure.u64(syAmount)]);
-  const priceInfo = adapter.addPriceInfo({ tx, config, syIndex });
-  const burnRequest = addBurnSyExactIn(tx, config, priceInfo, syCoin);
+  const input = adapter.kind === "scallop"
+    ? syCoin
+    : addBurnSyExactIn(tx, config, adapter.addPriceInfo({ tx, config, syIndex }), syCoin);
   const redeemResult = adapter.addRedeemFromSy({
     tx,
     config,
-    burnRequest,
+    input,
     syAmount,
   });
   tx.transferObjects([redeemResult.outputCoin], tx.pure.address(senderAddress));

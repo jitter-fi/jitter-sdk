@@ -40,7 +40,8 @@ export const CoinRewarder = new MoveStruct({ name: `${$moduleName}::CoinRewarder
         total_distributed: bcs.u256(),
         enabled: bcs.bool(),
         closed: bcs.bool(),
-        closed_at_ms: bcs.u64()
+        closed_at_ms: bcs.u64(),
+        withdrawn: bcs.bool()
     } });
 export const PositionKey = new MoveTuple({ name: `${$moduleName}::PositionKey`, fields: [bcs.Address] });
 export const OwnerSubjectKey = new MoveStruct({ name: `${$moduleName}::OwnerSubjectKey`, fields: {
@@ -83,6 +84,15 @@ export const CoinRewarderClosedEvent = new MoveStruct({ name: `${$moduleName}::C
         allocated_rewards: bcs.u64(),
         moved_to_undistributed: bcs.u64(),
         undistributed_rewards: bcs.u64()
+    } });
+export const CoinRewarderWithdrawnEvent = new MoveStruct({ name: `${$moduleName}::CoinRewarderWithdrawnEvent`, fields: {
+        rewarder_id: bcs.Address,
+        caller: bcs.Address,
+        withdrawn_at_ms: bcs.u64(),
+        amount: bcs.u64(),
+        allocated_cancelled: bcs.u64(),
+        scheduled_cancelled: bcs.u64(),
+        undistributed: bcs.u64()
     } });
 export const CoinRewardFundingLotAdjustedEvent = new MoveStruct({ name: `${$moduleName}::CoinRewardFundingLotAdjustedEvent`, fields: {
         rewarder_id: bcs.Address,
@@ -379,6 +389,48 @@ export function closeByAdmin(options: CloseByAdminOptions) {
         typeArguments: options.typeArguments
     });
 }
+export interface WithdrawAndCloseByAdminArguments {
+    rewarder: RawTransactionArgument<string>;
+    globalConfig: RawTransactionArgument<string>;
+    adminCap: RawTransactionArgument<string>;
+    distributor: RawTransactionArgument<string>;
+}
+export interface WithdrawAndCloseByAdminOptions {
+    package?: string;
+    arguments: WithdrawAndCloseByAdminArguments | [
+        rewarder: RawTransactionArgument<string>,
+        globalConfig: RawTransactionArgument<string>,
+        adminCap: RawTransactionArgument<string>,
+        distributor: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string
+    ];
+}
+/**
+ * Withdraws the entire vault and permanently retires this rewarder. Unlike
+ * close_by_admin, this cancels materialized, lazy and detached user claims. Admin
+ * need not enumerate positions, wait for expiry or clear allocated rewards. The
+ * returned Coin must be explicitly transferred by the caller's PTB.
+ */
+export function withdrawAndCloseByAdmin(options: WithdrawAndCloseByAdminOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        null,
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["rewarder", "globalConfig", "adminCap", "distributor"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'coin_rewarder',
+        function: 'withdraw_and_close_by_admin',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
 export interface AdjustLotByAdminArguments {
     rewarder: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
@@ -412,7 +464,7 @@ export interface AdjustLotByAdminOptions {
  * Checkpoints the old calendar at `Clock.timestamp_ms`, then replaces only the
  * selected lot's unaccounted remainder. Reducing the remaining budget moves the
  * difference to `undistributed_rewards`; already-accounted rewards are never
- * rewritten.
+ * rewritten. Zero cancels this lot; delay/duration are then ignored.
  */
 export function adjustLotByAdmin(options: AdjustLotByAdminOptions) {
     const packageAddress = options.package ?? 'jitter/jitter-extensions';
@@ -1209,6 +1261,32 @@ export function closed(options: ClosedOptions) {
         package: packageAddress,
         module: 'coin_rewarder',
         function: 'closed',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface WithdrawnArguments {
+    rewarder: RawTransactionArgument<string>;
+}
+export interface WithdrawnOptions {
+    package?: string;
+    arguments: WithdrawnArguments | [
+        rewarder: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string
+    ];
+}
+export function withdrawn(options: WithdrawnOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter-extensions';
+    const argumentsTypes = [
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["rewarder"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'coin_rewarder',
+        function: 'withdrawn',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });

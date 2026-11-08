@@ -4,7 +4,7 @@ import type {
   JitterMarketDisplaySnapshot,
 } from "../config.js";
 import { FP64_ONE } from "../constants.js";
-import { toDecimalUnits } from "../domain/amounts.js";
+import { normalizeMoveNumeric } from "../domain/amounts.js";
 import {
   buildJitterMarketOverview,
   type JitterMarketOverview,
@@ -19,9 +19,20 @@ import type { JitterChainReader } from "../ports/chain-reader.js";
 import type { JitterMarketConfigProvider } from "../ports/config-provider.js";
 import {
   getMarketAccountingDecimals,
+  getMarketUnderlyingDecimals,
   type JitterMarketConfig,
+  type PoolFields,
+  type PyStateFields,
 } from "../types.js";
-import { overlayJitterMarketConfigFromRegistry } from "../market-registry.js";
+import {
+  overlayJitterMarketConfigFromRegistry,
+  overlayJitterMarketConfigFromRegistrySnapshot,
+} from "../market-registry.js";
+import { discoverJitterRegistry, registryId, type RegistrySnapshot } from "../registry-v2.js";
+import { getHaedalStakeQuote } from "../adapters/haedal.js";
+import { getEmberDepositQuote } from "../adapters/ember.js";
+import { getScallopMarketIndex } from "../queries.js";
+import { valueMarketBalances } from "../domain/market-valuation.js";
 
 export type { JitterMarketOverview } from "../domain/market-mappers.js";
 
@@ -56,12 +67,7 @@ export type JitterMarketExplorerData = {
 };
 
 export type JitterTradeProduct = "pt" | "yt" | "lp";
-export type JitterTradeSide =
-  | "buy"
-  | "sell"
-  | "add"
-  | "add_keep_yt"
-  | "remove";
+export type JitterTradeSide = "buy" | "sell" | "add" | "add_keep_yt" | "remove";
 export type JitterTradeActionId =
   | "buy_pt"
   | "sell_pt"
@@ -93,7 +99,7 @@ export type JitterMarketTradeAction = {
 
 export type JitterMarketTradeMetadata = {
   marketId: string;
-  adapterKind: "demo" | "scallop" | "ember" | "suilend" | "navi";
+  adapterKind: "demo" | "scallop" | "haedal" | "ember" | "suilend" | "navi";
   tradeReady: boolean;
   disabledReason: string | null;
   missingConfigKeys: string[];
@@ -110,9 +116,11 @@ export type CreateJitterMarketDataServiceOptions = {
   configProvider: JitterMarketConfigProvider;
   chainReader: JitterChainReader;
   analyticsReader?: JitterAnalyticsReader;
-  getUnderlyingApy?: (
+  getUnderlyingApy?: (config: JitterMarketConfig) => number | Promise<number>;
+  getUnderlyingPriceUsd?: (
     config: JitterMarketConfig,
-  ) => number | Promise<number>;
+  ) => number | null | Promise<number | null>;
+  resolveSyIndex?: (config: JitterMarketConfig) => bigint | Promise<bigint>;
 };
 
 export type JitterMarketDataService = {
@@ -146,7 +154,10 @@ export function createJitterMarketDataService(
       const entries = options.configProvider.listMarketConfigEntries(
         options.network,
       );
-      const resolvedEntries = await resolveMarketConfigEntries(options, entries);
+      const resolvedEntries = await resolveMarketConfigEntries(
+        options,
+        entries,
+      );
       const markets = await Promise.all(
         resolvedEntries.map((entry) =>
           hydrateMarketOverview(options, entry, {
@@ -210,11 +221,22 @@ async function resolveMarketConfigEntries(
   options: CreateJitterMarketDataServiceOptions,
   entries: readonly JitterMarketConfigEntry[],
 ): Promise<JitterMarketConfigEntry[]> {
+  const registries = new Map<string, Promise<RegistrySnapshot>>();
   return Promise.all(
-    entries.map(async (entry) => ({
-      ...entry,
-      config: await overlayConfigFromRegistry(options, entry.config),
-    })),
+    entries.map(async (entry) => {
+      if (!entry.config.marketRegistryObjectId)
+        return { ...entry, config: { ...entry.config } };
+      const id = registryId(entry.config.marketRegistryObjectId);
+      let snapshot = registries.get(id);
+      if (!snapshot) {
+        snapshot = discoverJitterRegistry(options.chainReader, id);
+        registries.set(id, snapshot);
+      }
+      return {
+        ...entry,
+        config: overlayJitterMarketConfigFromRegistrySnapshot(entry.config, await snapshot),
+      };
+    }),
   );
 }
 
@@ -224,11 +246,7 @@ async function overlayConfigFromRegistry(
 ): Promise<JitterMarketConfig> {
   if (!config.marketRegistryObjectId) return { ...config };
 
-  try {
-    return await overlayJitterMarketConfigFromRegistry(options.chainReader, config);
-  } catch {
-    return { ...config };
-  }
+  return overlayJitterMarketConfigFromRegistry(options.chainReader, config);
 }
 
 const PRODUCT_LEVEL_TRADE_ACTIONS: readonly Omit<
@@ -329,8 +347,18 @@ function buildMarketTradeMetadata(
     missingConfigKeys,
     actions: PRODUCT_LEVEL_TRADE_ACTIONS.map((action) => ({
       ...action,
-      inputAssets: [...action.inputAssets],
-      outputAssets: [...action.outputAssets],
+      inputAssets:
+        (entry.config.haedalAdapterPackageId ||
+          entry.config.emberAdapterPackageId) &&
+        action.inputAssets.includes("underlying")
+          ? [...action.inputAssets, "marketCoin"]
+          : [...action.inputAssets],
+      outputAssets:
+        (entry.config.haedalAdapterPackageId ||
+          entry.config.emberAdapterPackageId) &&
+        action.outputAssets.includes("sy")
+          ? [...action.outputAssets, "marketCoin"]
+          : [...action.outputAssets],
       disabledReason,
     })),
   };
@@ -355,15 +383,17 @@ function resolveAdapterKind(
 ): JitterMarketTradeMetadata["adapterKind"] {
   const registered = config.adapterKind?.trim().toLowerCase();
   if (
-    registered === "demo"
-    || registered === "scallop"
-    || registered === "ember"
-    || registered === "suilend"
-    || registered === "navi"
+    registered === "demo" ||
+    registered === "scallop" ||
+    registered === "haedal" ||
+    registered === "ember" ||
+    registered === "suilend" ||
+    registered === "navi"
   ) {
     return registered;
   }
   if (config.scallopMarketVaultObjectId) return "scallop";
+  if (config.haedalMarketVaultObjectId) return "haedal";
   if (config.emberMarketVaultObjectId) return "ember";
   if (config.suilendMarketVaultObjectId) return "suilend";
   if (config.naviMarketVaultObjectId) return "navi";
@@ -414,6 +444,38 @@ export function getMissingTradeReadyConfigKeys(
     Boolean(config.scallopMarketObjectId) &&
     Boolean(config.scallopVersionObjectId);
 
+  if (config.adapterKind === "ember" || config.emberAdapterPackageId) {
+    return Array.from(
+      new Set([
+        ...missing,
+        ...missingConfigKeys([
+          ["emberAdapterPackageId", config.emberAdapterPackageId],
+          ["emberMarketVaultObjectId", config.emberMarketVaultObjectId],
+          ["emberVaultObjectId", config.emberVaultObjectId],
+          ["emberVaultsPackageId", config.emberVaultsPackageId],
+          ["emberProtocolConfigObjectId", config.emberProtocolConfigObjectId],
+          ["emberReceiptTypeTag", config.emberReceiptTypeTag],
+          ["jitterMathPackageId", config.jitterMathPackageId],
+          ["globalConfigObjectId", config.globalConfigObjectId],
+        ]),
+      ]),
+    );
+  }
+  if (config.adapterKind === "haedal" || config.haedalAdapterPackageId) {
+    return Array.from(
+      new Set([
+        ...missing,
+        ...missingConfigKeys([
+          ["haedalAdapterPackageId", config.haedalAdapterPackageId],
+          ["haedalMarketVaultObjectId", config.haedalMarketVaultObjectId],
+          ["haedalStakingObjectId", config.haedalStakingObjectId],
+          ["haedalProtocolPackageId", config.haedalProtocolPackageId],
+          ["jitterMathPackageId", config.jitterMathPackageId],
+          ["globalConfigObjectId", config.globalConfigObjectId],
+        ]),
+      ]),
+    );
+  }
   if (hasCoreMarket && (hasDemoRoute || hasScallopRoute)) return [];
 
   if (!hasDemoRoute && !hasScallopRoute) {
@@ -460,7 +522,8 @@ export function buildJitterMarketGroups(
         bestLongYieldApy: market.longYieldApy,
         bestYtLeverage: market.ytLeverage,
         categories: [...market.categories],
-        searchText: `${market.symbol} ${market.protocol} ${market.groupId}`.toLowerCase(),
+        searchText:
+          `${market.symbol} ${market.protocol} ${market.groupId}`.toLowerCase(),
         markets: [market],
       });
       continue;
@@ -556,12 +619,13 @@ async function hydrateMarketOverview(
     );
   }
 
-  const [pool, pyState, volume, underlyingApy, analytics] = await Promise.all([
+  const [pool, pyState, volume, underlyingApy, analytics, receiptPrices] = await Promise.all([
     options.chainReader.getPoolState(config),
     options.chainReader.getPyState(config),
     getPoolVolumeStats(options.chainReader, config),
     options.getUnderlyingApy?.(config) ?? 0,
     getMarketAnalyticsForOverview(options, marketId),
+    getLiveReceiptPrices(options, config),
   ]);
 
   const overview = buildJitterMarketOverview({
@@ -575,9 +639,19 @@ async function hydrateMarketOverview(
     nowMs: serviceOptions.nowMs,
   });
 
-  return analytics
+  const hydrated = analytics
     ? applyMarketAnalyticsSnapshot(overview, analytics, config, serviceOptions)
     : overview;
+  return withLiveReceiptPrices(
+    config,
+    hydrated,
+    pool,
+    pyState,
+    analytics,
+    volume,
+    receiptPrices,
+    serviceOptions.nowMs,
+  );
 }
 
 async function hydrateDisplayMarketOverview(
@@ -587,9 +661,10 @@ async function hydrateDisplayMarketOverview(
   snapshot: JitterMarketDisplaySnapshot,
   serviceOptions: MarketDataServiceOptions & { tradeReady: boolean },
 ): Promise<JitterMarketOverview> {
-  const [underlyingApy, analytics] = await Promise.all([
+  const [underlyingApy, analytics, receiptPrices] = await Promise.all([
     snapshot.underlyingApy ?? options.getUnderlyingApy?.(config) ?? 0,
     getMarketAnalyticsForOverview(options, marketId),
+    getLiveReceiptPrices(options, config),
   ]);
   const overview = buildJitterMarketOverview({
     marketId,
@@ -602,9 +677,142 @@ async function hydrateDisplayMarketOverview(
     nowMs: serviceOptions.nowMs,
   });
 
-  return analytics
+  const hydrated = analytics
     ? applyMarketAnalyticsSnapshot(overview, analytics, config, serviceOptions)
     : overview;
+  return withLiveReceiptPrices(
+    config,
+    hydrated,
+    snapshot.pool,
+    snapshot.pyState,
+    analytics,
+    displaySnapshotVolumeToStats(snapshot.volume),
+    receiptPrices,
+    serviceOptions.nowMs,
+  );
+}
+
+type LiveReceiptPrices = { usd: number; index: bigint };
+
+function usesLiveReceiptPrices(config: JitterMarketConfig): boolean {
+  return Boolean(
+    config.emberAdapterPackageId ||
+    config.haedalAdapterPackageId ||
+    config.scallopMarketVaultObjectId,
+  );
+}
+
+async function getLiveReceiptPrices(
+  options: CreateJitterMarketDataServiceOptions,
+  config: JitterMarketConfig,
+): Promise<LiveReceiptPrices | null> {
+  if (!usesLiveReceiptPrices(config)) return null;
+  const network = options.network === "mainnet" ? "mainnet" : "testnet";
+  try {
+    const [usd, index] = await Promise.all([
+      Promise.resolve().then(() => options.getUnderlyingPriceUsd?.(config) ?? config.underlyingPriceUsd),
+      Promise.resolve().then(async () => options.resolveSyIndex
+        ? options.resolveSyIndex(config)
+        : config.emberAdapterPackageId
+          ? (await getEmberDepositQuote(network, config, 0n)).syIndex
+          : config.haedalAdapterPackageId
+            ? (await getHaedalStakeQuote(network, config, 0n)).syIndex
+            : config.scallopMarketVaultObjectId && config.scallopMarketObjectId
+              ? BigInt((await getScallopMarketIndex(network, config)).syIndexRaw)
+              : undefined),
+    ]);
+    return typeof usd === "number" && Number.isFinite(usd) && usd > 0 && index !== undefined && index > 0n
+      ? { usd, index }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function withLiveReceiptPrices(
+  config: JitterMarketConfig,
+  overview: JitterMarketOverview,
+  pool: PoolFields,
+  py: PyStateFields,
+  analytics: MarketAnalyticsResult | null,
+  volume: MarketVolumeStats,
+  prices: LiveReceiptPrices | null,
+  nowMs = Date.now(),
+): JitterMarketOverview {
+  if (!usesLiveReceiptPrices(config)) return overview;
+  const unavailable = {
+    ...overview,
+    liquidity: Number.NaN,
+    tvl: Number.NaN,
+    volume24h: Number.NaN,
+    volume7d: Number.NaN,
+    totalFees: Number.NaN,
+    underlyingPrice: Number.NaN,
+    ptUsdValue: Number.NaN,
+    ytAssetPrice: Number.NaN,
+    ytLeverage: Number.NaN,
+    syPrice: undefined,
+    lpPrice: undefined,
+    marketCoinPrice: undefined,
+  };
+  if (!prices) return unavailable;
+  try {
+    const { usd, index } = prices;
+    const fixedApy =
+      Math.exp(Number(normalizeMoveNumeric(pool.last_ln_implied_rate)) / Number(FP64_ONE)) -
+      1;
+    const ptPrice = quotePtPriceFromImpliedApy(
+      usd,
+      fixedApy,
+      Math.max(overview.maturityTimestamp * 1000 - nowMs, 0) / (365 * 86400000),
+    );
+    const values = valueMarketBalances({
+      poolSyRaw: pool.total_sy,
+      poolPtRaw: pool.total_pt,
+      pySyRaw: py.sy_balance,
+      reserveFeeSyRaw: py.reserve_fee_balance ?? "0",
+      volume24hSyRaw: analytics?.volume24h.raw ?? String(volume.volume24hSy),
+      volume7dSyRaw: analytics?.volume7d.raw ?? String(volume.volume7dSy),
+      totalFeesSyRaw: String(volume.totalFeesSy),
+      marketDecimals: getMarketAccountingDecimals(config),
+      underlyingDecimals: getMarketUnderlyingDecimals(config),
+      syIndexRaw: index,
+      underlyingPriceUsd: usd,
+      ptPriceUsd: ptPrice,
+    });
+    const lpBreakdown = {
+      ...overview.lpBreakdown,
+      syWeight: values.syWeight,
+      ptWeight: values.ptWeight,
+      scaledImpliedApy: fixedApy * values.ptWeight,
+      scaledSyInterestApy: overview.underlyingApy * values.syWeight,
+    };
+    const ytPrice = Math.max(usd - ptPrice, 0);
+    const longYieldApy = Math.max(overview.underlyingApy - fixedApy, 0);
+    return {
+      ...overview,
+      ...values,
+      fixedApy,
+      ptRoi: fixedApy,
+      underlyingPrice: usd,
+      ptUsdValue: ptPrice,
+      ytAssetPrice: ytPrice,
+      longYieldApy,
+      ytRoi: longYieldApy,
+      marketCoinPrice: values.syPrice,
+      lpPrice: BigInt(pool.lp_supply) > 0n
+        ? values.liquidity / (Number(pool.lp_supply) / 10 ** getMarketAccountingDecimals(config))
+        : undefined,
+      ytLeverage: quoteYtLeverage(usd, ytPrice, overview.underlyingApy),
+      lpBreakdown,
+      lpApy:
+        lpBreakdown.scaledImpliedApy +
+        lpBreakdown.scaledSyInterestApy +
+        lpBreakdown.swapFeeApy,
+    };
+  } catch {
+    return unavailable;
+  }
 }
 
 function displaySnapshotVolumeToStats(
@@ -628,7 +836,9 @@ async function getPoolVolumeStats(
   config: JitterMarketConfig,
 ): Promise<MarketVolumeStats> {
   try {
-    return (await chainReader.getPoolVolumeStats?.(config)) ?? EMPTY_POOL_VOLUME;
+    return (
+      (await chainReader.getPoolVolumeStats?.(config)) ?? EMPTY_POOL_VOLUME
+    );
   } catch {
     return EMPTY_POOL_VOLUME;
   }
@@ -691,14 +901,13 @@ function applyMarketAnalyticsSnapshot(
   options: MarketDataServiceOptions,
 ): JitterMarketOverview {
   const decimals = getMarketAccountingDecimals(config);
-  const fixedApy = parseAnalyticsRate(analytics.impliedApy) ?? overview.fixedApy;
+  const fixedApy =
+    parseAnalyticsRate(analytics.impliedApy) ?? overview.fixedApy;
   const nowMs = options.nowMs ?? Date.now();
-  const yearsToMaturity = Math.max(overview.maturityTimestamp * 1000 - nowMs, 0) /
+  const yearsToMaturity =
+    Math.max(overview.maturityTimestamp * 1000 - nowMs, 0) /
     (365 * 24 * 60 * 60 * 1000);
-  const underlyingPrice =
-    amountSnapshotUnitUsd(analytics.liquidity, decimals) ??
-    amountSnapshotUnitUsd(analytics.tvl, decimals) ??
-    overview.underlyingPrice;
+  const underlyingPrice = overview.underlyingPrice;
   const ptUsdValue = quotePtPriceFromImpliedApy(
     underlyingPrice,
     fixedApy,
@@ -727,8 +936,7 @@ function applyMarketAnalyticsSnapshot(
       amountSnapshotToNumber(analytics.volume24h, decimals) ??
       overview.volume24h,
     volume7d:
-      amountSnapshotToNumber(analytics.volume7d, decimals) ??
-      overview.volume7d,
+      amountSnapshotToNumber(analytics.volume7d, decimals) ?? overview.volume7d,
     fixedApy,
     ptRoi: fixedApy,
     ptUsdValue,
@@ -766,8 +974,7 @@ function buildMarketAnalyticsState(
   return {
     source: analytics.source,
     updatedAtMs,
-    isStale:
-      updatedAtMs === null ? true : nowMs - updatedAtMs > staleAfterMs,
+    isStale: updatedAtMs === null ? true : nowMs - updatedAtMs > staleAfterMs,
     staleAfterMs,
     underlyingApySource: analytics.underlyingApySource,
     underlyingApyUpdatedAtMs: parseAnalyticsTimestamp(
@@ -783,33 +990,7 @@ function amountSnapshotToNumber(
   decimals: number,
 ): number | null {
   if (amount.usd !== null) return parseFiniteNumber(amount.usd);
-  try {
-    const value = toDecimalUnits(amount.raw, decimals);
-    return Number.isFinite(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function amountSnapshotUnitUsd(
-  amount: MarketAnalyticsResult["tvl"],
-  decimals: number,
-): number | null {
-  if (amount.usd === null) return null;
-  const usd = parseFiniteNumber(amount.usd);
-  if (usd === null || usd <= 0) return null;
-  const rawUnits = amountSnapshotRawUnits(amount.raw, decimals);
-  if (rawUnits === null || rawUnits <= 0) return null;
-  return usd / rawUnits;
-}
-
-function amountSnapshotRawUnits(raw: string, decimals: number): number | null {
-  try {
-    const value = toDecimalUnits(raw, decimals);
-    return Number.isFinite(value) ? value : null;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function quotePtPriceFromImpliedApy(
@@ -823,7 +1004,10 @@ function quotePtPriceFromImpliedApy(
   }
   if (yearsToMaturity <= 0) return underlyingPrice;
 
-  const discountFactor = Math.pow(1 + Math.max(impliedApy, -0.999999), -yearsToMaturity);
+  const discountFactor = Math.pow(
+    1 + Math.max(impliedApy, -0.999999),
+    -yearsToMaturity,
+  );
   return underlyingPrice * Math.min(Math.max(discountFactor, 0), 1);
 }
 

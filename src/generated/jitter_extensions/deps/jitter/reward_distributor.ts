@@ -6,8 +6,8 @@
 /**
  * Market-scoped reward coordination.
  *
- * Every distributor belongs to exactly one MarketState. Rewarders are grouped by
- * scope and must settle their own ID before a mutation or transfer can consume the
+ * Every distributor belongs to exactly one Market. Rewarders are grouped by scope
+ * and must settle their own ID before a mutation or transfer can consume the
  * hot-potato operation.
  */
 

@@ -45,13 +45,13 @@ export const RouterSwapYtForSyEvent = new MoveStruct({ name: `${$moduleName}::Ro
         sy_amount_out: bcs.u64(),
         sy_amount_repaid: bcs.u64()
     } });
-export interface CreateMarketStatePositionArguments {
+export interface CreatePositionArguments {
     state: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
 }
-export interface CreateMarketStatePositionOptions {
+export interface CreatePositionOptions {
     package?: string;
-    arguments: CreateMarketStatePositionArguments | [
+    arguments: CreatePositionArguments | [
         state: RawTransactionArgument<string>,
         globalConfig: RawTransactionArgument<string>
     ];
@@ -61,7 +61,7 @@ export interface CreateMarketStatePositionOptions {
         string
     ];
 }
-export function createMarketStatePosition(options: CreateMarketStatePositionOptions) {
+export function createPosition(options: CreatePositionOptions) {
     const packageAddress = options.package ?? 'jitter/jitter';
     const argumentsTypes = [
         null,
@@ -72,25 +72,25 @@ export function createMarketStatePosition(options: CreateMarketStatePositionOpti
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'router',
-        function: 'create_market_state_position',
+        function: 'create_position',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });
 }
-export interface TransferPositionArguments {
+export interface TransferEmptyPositionArguments {
     position: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
     recipient: RawTransactionArgument<string>;
 }
-export interface TransferPositionOptions {
+export interface TransferEmptyPositionOptions {
     package?: string;
-    arguments: TransferPositionArguments | [
+    arguments: TransferEmptyPositionArguments | [
         position: RawTransactionArgument<string>,
         globalConfig: RawTransactionArgument<string>,
         recipient: RawTransactionArgument<string>
     ];
 }
-export function transferPosition(options: TransferPositionOptions) {
+export function transferEmptyPosition(options: TransferEmptyPositionOptions) {
     const packageAddress = options.package ?? 'jitter/jitter';
     const argumentsTypes = [
         null,
@@ -101,11 +101,11 @@ export function transferPosition(options: TransferPositionOptions) {
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'router',
-        function: 'transfer_position',
+        function: 'transfer_empty_position',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }
-export interface TransferMarketStatePositionAfterRewardSettlementArguments {
+export interface TransferPositionArguments {
     ytSettlements: RawTransactionArgument<Array<string>>;
     lpSettlements: RawTransactionArgument<Array<string>>;
     distributor: RawTransactionArgument<string>;
@@ -114,9 +114,9 @@ export interface TransferMarketStatePositionAfterRewardSettlementArguments {
     globalConfig: RawTransactionArgument<string>;
     recipient: RawTransactionArgument<string>;
 }
-export interface TransferMarketStatePositionAfterRewardSettlementOptions {
+export interface TransferPositionOptions {
     package?: string;
-    arguments: TransferMarketStatePositionAfterRewardSettlementArguments | [
+    arguments: TransferPositionArguments | [
         ytSettlements: RawTransactionArgument<Array<string>>,
         lpSettlements: RawTransactionArgument<Array<string>>,
         distributor: RawTransactionArgument<string>,
@@ -132,10 +132,10 @@ export interface TransferMarketStatePositionAfterRewardSettlementOptions {
     ];
 }
 /**
- * Transfer a MarketState-bound position after all reward-bearing legs are settled
- * for the current owner.
+ * Transfer a Market-bound position after all reward-bearing legs are settled for
+ * the current owner.
  */
-export function transferMarketStatePositionAfterRewardSettlement(options: TransferMarketStatePositionAfterRewardSettlementOptions) {
+export function transferPosition(options: TransferPositionOptions) {
     const packageAddress = options.package ?? 'jitter/jitter';
     const argumentsTypes = [
         'vector<null>',
@@ -150,7 +150,7 @@ export function transferMarketStatePositionAfterRewardSettlement(options: Transf
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'router',
-        function: 'transfer_market_state_position_after_reward_settlement',
+        function: 'transfer_position',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });
@@ -1185,15 +1185,15 @@ export function settleMarketStateByAdmin(options: SettleMarketStateByAdminOption
         typeArguments: options.typeArguments
     });
 }
-export interface RedeemMarketStateAfterExpiryArguments {
+export interface RedeemPtAfterExpiryArguments {
     ptAmount: RawTransactionArgument<number | bigint>;
     position: RawTransactionArgument<string>;
     state: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
 }
-export interface RedeemMarketStateAfterExpiryOptions {
+export interface RedeemPtAfterExpiryOptions {
     package?: string;
-    arguments: RedeemMarketStateAfterExpiryArguments | [
+    arguments: RedeemPtAfterExpiryArguments | [
         ptAmount: RawTransactionArgument<number | bigint>,
         position: RawTransactionArgument<string>,
         state: RawTransactionArgument<string>,
@@ -1205,7 +1205,7 @@ export interface RedeemMarketStateAfterExpiryOptions {
         string
     ];
 }
-export function redeemMarketStateAfterExpiry(options: RedeemMarketStateAfterExpiryOptions) {
+export function redeemPtAfterExpiry(options: RedeemPtAfterExpiryOptions) {
     const packageAddress = options.package ?? 'jitter/jitter';
     const argumentsTypes = [
         'u64',
@@ -1218,7 +1218,7 @@ export function redeemMarketStateAfterExpiry(options: RedeemMarketStateAfterExpi
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'router',
-        function: 'redeem_market_state_after_expiry',
+        function: 'redeem_pt_after_expiry',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });
@@ -1274,15 +1274,15 @@ export function redeemYtAfterExpiry(options: RedeemYtAfterExpiryOptions) {
         typeArguments: options.typeArguments
     });
 }
-export interface ClaimMarketStateYtInterestArguments {
+export interface ClaimYtInterestArguments {
     priceInfoOpt: RawTransactionArgument<string | null>;
     position: RawTransactionArgument<string>;
     state: RawTransactionArgument<string>;
     globalConfig: RawTransactionArgument<string>;
 }
-export interface ClaimMarketStateYtInterestOptions {
+export interface ClaimYtInterestOptions {
     package?: string;
-    arguments: ClaimMarketStateYtInterestArguments | [
+    arguments: ClaimYtInterestArguments | [
         priceInfoOpt: RawTransactionArgument<string | null>,
         position: RawTransactionArgument<string>,
         state: RawTransactionArgument<string>,
@@ -1294,7 +1294,7 @@ export interface ClaimMarketStateYtInterestOptions {
         string
     ];
 }
-export function claimMarketStateYtInterest(options: ClaimMarketStateYtInterestOptions) {
+export function claimYtInterest(options: ClaimYtInterestOptions) {
     const packageAddress = options.package ?? 'jitter/jitter';
     const argumentsTypes = [
         '0x1::option::Option<null>',
@@ -1307,7 +1307,7 @@ export function claimMarketStateYtInterest(options: ClaimMarketStateYtInterestOp
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
         module: 'router',
-        function: 'claim_market_state_yt_interest',
+        function: 'claim_yt_interest',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });

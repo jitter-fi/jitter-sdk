@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const generatedDir = path.resolve(__dirname, "..", "src", "generated");
+const selectedPackages = process.argv.slice(2);
 const PACKAGE_NAME_REPLACEMENTS = new Map([
   ["@local-pkg/demo_adapter", "jitter/demo-adapter"],
   ["@local-pkg/jitter", "jitter/jitter"],
@@ -75,7 +76,9 @@ async function main() {
     throw new Error(`Generated directory not found: ${generatedDir}`);
   }
 
-  const files = await walk(generatedDir);
+  const files = selectedPackages.length
+    ? (await Promise.all(selectedPackages.map((name) => walk(path.join(generatedDir, name))))).flat()
+    : await walk(generatedDir);
 
   await Promise.all(
     files.map(async (filePath) => {

@@ -40,6 +40,15 @@ export type MarketAnalyticsResult = {
   updatedAtMs: string | null;
 };
 
+export type MarketMetadataResult = {
+  marketId: string;
+  source: AnalyticsDataSource;
+  marketCreatedAtMs: string | null;
+  poolCreatedAtMs: string | null;
+  firstSeenAtMs: string | null;
+  updatedAtMs: string | null;
+};
+
 export type MarketChartQuery = MarketAnalyticsQuery & {
   range: AnalyticsRange;
   product?: AnalyticsChartProduct;
@@ -121,6 +130,12 @@ export type RewardSummaryQuery = {
 };
 
 export type RewardSummaryResult = {
+  ownershipBasis?: "scoreboard-plus-holdings-v1";
+  availableScoreboard?: string;
+  tokenizedPoints?: string;
+  scoreBasis?: "generated-v1";
+  settledPoints?: string;
+  pendingPoints?: string;
   projectId: string;
   userAddress: string;
   source: AnalyticsDataSource;
@@ -137,6 +152,10 @@ export type RewardLeaderboardQuery = {
 };
 
 export type RewardLeaderboardRow = {
+  availableScoreboard?: string;
+  tokenizedPoints?: string;
+  settledPoints?: string;
+  pendingPoints?: string;
   rank: number;
   userAddress: string;
   onChainPoints: string;
@@ -145,6 +164,9 @@ export type RewardLeaderboardRow = {
 };
 
 export type RewardLeaderboardResult = {
+  ownershipBasis?: "scoreboard-plus-holdings-v1";
+  scoreBasis?: "generated-v1";
+  totalUsers?: number;
   projectId: string;
   source: AnalyticsDataSource;
   rows: RewardLeaderboardRow[];
@@ -153,6 +175,7 @@ export type RewardLeaderboardResult = {
 
 export interface JitterAnalyticsReader {
   getMarketAnalytics(query: MarketAnalyticsQuery): Promise<MarketAnalyticsResult>;
+  getMarketMetadata(query: MarketAnalyticsQuery): Promise<MarketMetadataResult>;
   getMarketChart(query: MarketChartQuery): Promise<MarketChartSeries>;
   getMarketActivity(query: MarketActivityQuery): Promise<MarketActivityPage>;
   getOrderbookLadder(query: OrderbookLadderQuery): Promise<OrderbookLadderResult>;

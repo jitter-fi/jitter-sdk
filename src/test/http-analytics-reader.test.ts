@@ -62,6 +62,16 @@ describe("HttpJitterAnalyticsReader", () => {
           updatedAtMs: "1710000000000",
         });
       }
+      if (url.includes("/metadata")) {
+        return jsonResponse({
+          marketId: "market-a",
+          source: "indexer",
+          marketCreatedAtMs: "1710000000000",
+          poolCreatedAtMs: "1710000120000",
+          firstSeenAtMs: "1710000000000",
+          updatedAtMs: "1710000120000",
+        });
+      }
       if (url.includes("/chart")) {
         return jsonResponse({ marketId: "market-a", range: "7d", source: "indexer", series: [] });
       }
@@ -107,6 +117,7 @@ describe("HttpJitterAnalyticsReader", () => {
     });
 
     await reader.getMarketAnalytics({ network: "testnet", marketId: "market-a" });
+    await reader.getMarketMetadata({ network: "testnet", marketId: "market-a" });
     await reader.getMarketChart({ network: "testnet", marketId: "market-a", range: "7d", product: "lp", series: ["implied_apy", "volume"] });
     await reader.getMarketActivity({ network: "testnet", marketId: "market-a", actor: "0xuser", limit: 25, cursor: "abc" });
     await reader.getOrderbookLadder({ network: "testnet", marketId: "market-a", asset: "pt", bucket: "bps" });
@@ -115,6 +126,7 @@ describe("HttpJitterAnalyticsReader", () => {
 
     expect(urls).toEqual([
       "https://indexer.example.test/api/v1/markets/market-a/analytics?network=testnet",
+      "https://indexer.example.test/api/v1/markets/market-a/metadata?network=testnet",
       "https://indexer.example.test/api/v1/markets/market-a/chart?network=testnet&range=7d&product=lp&series=implied_apy%2Cvolume",
       "https://indexer.example.test/api/v1/markets/market-a/activity?network=testnet&limit=25&cursor=abc&actor=0xuser",
       "https://indexer.example.test/api/v1/markets/market-a/orderbook?network=testnet&asset=pt&bucket=bps",

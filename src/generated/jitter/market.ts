@@ -4,11 +4,11 @@
 
 
 /**
- * market_state - unified market object for the current Jitter core.
+ * market - unified market object for the current Jitter core.
  *
  * This module collapses the legacy Market + PyState + Pool object graph into one
  * shared object. New router flows, market-scoped rewards, registry records, and
- * position accounting are all keyed to this MarketState object.
+ * position accounting are all keyed to this Market object.
  */
 
 import { MoveStruct, MoveTuple, normalizeMoveArguments, type RawTransactionArgument } from '../utils/index.js';
@@ -21,6 +21,7 @@ import * as type_name from './deps/std/type_name.js';
 import * as type_name_1 from './deps/std/type_name.js';
 import * as type_name_2 from './deps/std/type_name.js';
 import * as balance from './deps/sui/balance.js';
+import * as interest_math from './deps/jitter_math/interest_math.js';
 import * as balance_1 from './deps/sui/balance.js';
 import * as balance_2 from './deps/sui/balance.js';
 import * as fixed_point64 from './deps/jitter_math/fixed_point64.js';
@@ -33,7 +34,7 @@ import * as type_name_4 from './deps/std/type_name.js';
 import * as type_name_5 from './deps/std/type_name.js';
 import * as fixed_point64_3 from './deps/jitter_math/fixed_point64.js';
 import * as fixed_point64_4 from './deps/jitter_math/fixed_point64.js';
-const $moduleName = 'jitter/jitter::market_state';
+const $moduleName = 'jitter/jitter::market';
 export const SettlementState = new MoveStruct({ name: `${$moduleName}::SettlementState`, fields: {
         is_settled: bcs.bool(),
         settled_py_index: bcs.u128()
@@ -64,19 +65,19 @@ export const CoinAuthority = new MoveStruct({ name: `${$moduleName}::CoinAuthori
         pt_treasury: coin_1.TreasuryCap,
         yt_treasury: coin_2.TreasuryCap
     } });
-export const MarketState = new MoveStruct({ name: `${$moduleName}::MarketState<phantom SY, phantom PT, phantom YT>`, fields: {
+export const Market = new MoveStruct({ name: `${$moduleName}::Market<phantom SY, phantom PT, phantom YT>`, fields: {
         id: bcs.Address,
         expiry: bcs.u64(),
         sy_type: type_name.TypeName,
         pt_type: type_name_1.TypeName,
         yt_type: type_name_2.TypeName,
         /**
-         * Equal to this MarketState's own ID until an AdminCap binds the one canonical
+         * Equal to this Market's own ID until an AdminCap binds the one canonical
          * PriceAggregator. No production aggregator can share that ID.
          */
         price_aggregator_id: bcs.Address,
         /**
-         * Canonical market-scoped reward coordinator. A MarketState can bind this once;
+         * Canonical market-scoped reward coordinator. A Market can bind this once;
          * individual reward programs are configured on that distributor.
          */
         reward_distributor_id: bcs.option(bcs.Address),
@@ -86,7 +87,7 @@ export const MarketState = new MoveStruct({ name: `${$moduleName}::MarketState<p
         py_sy_balance: balance.Balance,
         py_index_stored: bcs.u128(),
         py_index_last_updated: bcs.u64(),
-        last_collect_interest_index: bcs.u128(),
+        interest_segment: interest_math.InterestSegment,
         total_treasury_interest: bcs.u128(),
         last_interest_timestamp: bcs.u64(),
         global_interest_index: bcs.u128(),
@@ -107,7 +108,7 @@ export const MarketState = new MoveStruct({ name: `${$moduleName}::MarketState<p
         risk: RiskConfig,
         rewards: RewardState
     } });
-export const MarketStateCreatedEvent = new MoveStruct({ name: `${$moduleName}::MarketStateCreatedEvent`, fields: {
+export const MarketCreatedEvent = new MoveStruct({ name: `${$moduleName}::MarketCreatedEvent`, fields: {
         market_state_id: bcs.Address,
         expiry: bcs.u64(),
         sy_type: type_name_3.TypeName,
@@ -115,11 +116,11 @@ export const MarketStateCreatedEvent = new MoveStruct({ name: `${$moduleName}::M
         yt_type: type_name_5.TypeName,
         created_by: bcs.Address
     } });
-export const MarketStatePriceAggregatorBoundEvent = new MoveStruct({ name: `${$moduleName}::MarketStatePriceAggregatorBoundEvent`, fields: {
+export const MarketPriceAggregatorBoundEvent = new MoveStruct({ name: `${$moduleName}::MarketPriceAggregatorBoundEvent`, fields: {
         market_state_id: bcs.Address,
         price_aggregator_id: bcs.Address
     } });
-export const MarketStateMintPyEvent = new MoveStruct({ name: `${$moduleName}::MarketStateMintPyEvent`, fields: {
+export const MarketMintPyEvent = new MoveStruct({ name: `${$moduleName}::MarketMintPyEvent`, fields: {
         market_state_id: bcs.Address,
         position_id: bcs.Address,
         sy_amount_in: bcs.u64(),
@@ -127,7 +128,7 @@ export const MarketStateMintPyEvent = new MoveStruct({ name: `${$moduleName}::Ma
         yt_amount: bcs.u64(),
         expiry: bcs.u64()
     } });
-export const MarketStateRedeemPyEvent = new MoveStruct({ name: `${$moduleName}::MarketStateRedeemPyEvent`, fields: {
+export const MarketRedeemPyEvent = new MoveStruct({ name: `${$moduleName}::MarketRedeemPyEvent`, fields: {
         market_state_id: bcs.Address,
         position_id: bcs.Address,
         pt_amount: bcs.u64(),
@@ -136,32 +137,32 @@ export const MarketStateRedeemPyEvent = new MoveStruct({ name: `${$moduleName}::
         expiry: bcs.u64(),
         redeemer: bcs.Address
     } });
-export const MarketStateInterestCollectedEvent = new MoveStruct({ name: `${$moduleName}::MarketStateInterestCollectedEvent`, fields: {
+export const MarketInterestCollectedEvent = new MoveStruct({ name: `${$moduleName}::MarketInterestCollectedEvent`, fields: {
         market_state_id: bcs.Address,
         user_interest_raw: bcs.u128(),
         treasury_interest_raw: bcs.u128(),
         py_index_raw: bcs.u128()
     } });
-export const MarketStateSettledEvent = new MoveStruct({ name: `${$moduleName}::MarketStateSettledEvent`, fields: {
+export const MarketSettledEvent = new MoveStruct({ name: `${$moduleName}::MarketSettledEvent`, fields: {
         market_state_id: bcs.Address,
         settled_py_index: bcs.u128(),
         treasury_interest_collected_raw: bcs.u128(),
         settled_at_ms: bcs.u64()
     } });
-export const MarketStateInterestClaimedEvent = new MoveStruct({ name: `${$moduleName}::MarketStateInterestClaimedEvent`, fields: {
+export const MarketInterestClaimedEvent = new MoveStruct({ name: `${$moduleName}::MarketInterestClaimedEvent`, fields: {
         market_state_id: bcs.Address,
         position_id: bcs.Address,
         sy_amount: bcs.u64(),
         receiver: bcs.Address
     } });
-export const MarketStateYtRedeemedAfterExpiryEvent = new MoveStruct({ name: `${$moduleName}::MarketStateYtRedeemedAfterExpiryEvent`, fields: {
+export const MarketYtRedeemedAfterExpiryEvent = new MoveStruct({ name: `${$moduleName}::MarketYtRedeemedAfterExpiryEvent`, fields: {
         market_state_id: bcs.Address,
         position_id: bcs.Address,
         yt_amount: bcs.u64(),
         sy_interest_out: bcs.u64(),
         redeemer: bcs.Address
     } });
-export const MarketStateAddLiquidityEvent = new MoveStruct({ name: `${$moduleName}::MarketStateAddLiquidityEvent`, fields: {
+export const MarketAddLiquidityEvent = new MoveStruct({ name: `${$moduleName}::MarketAddLiquidityEvent`, fields: {
         market_state_id: bcs.Address,
         position_id: bcs.Address,
         sy_amount: bcs.u64(),
@@ -170,7 +171,7 @@ export const MarketStateAddLiquidityEvent = new MoveStruct({ name: `${$moduleNam
         sy_refund: bcs.u64(),
         pt_refund: bcs.u64()
     } });
-export const MarketStateRemoveLiquidityEvent = new MoveStruct({ name: `${$moduleName}::MarketStateRemoveLiquidityEvent`, fields: {
+export const MarketRemoveLiquidityEvent = new MoveStruct({ name: `${$moduleName}::MarketRemoveLiquidityEvent`, fields: {
         market_state_id: bcs.Address,
         position_id: bcs.Address,
         sy_amount: bcs.u64(),
@@ -178,14 +179,14 @@ export const MarketStateRemoveLiquidityEvent = new MoveStruct({ name: `${$module
         lp_amount: bcs.u64(),
         provider: bcs.Address
     } });
-export const MarketStatePoolLifecycleEvent = new MoveStruct({ name: `${$moduleName}::MarketStatePoolLifecycleEvent`, fields: {
+export const MarketPoolLifecycleEvent = new MoveStruct({ name: `${$moduleName}::MarketPoolLifecycleEvent`, fields: {
         market_state_id: bcs.Address,
         previous_status: bcs.u8(),
         new_status: bcs.u8(),
         pool_generation: bcs.u64(),
         actor: bcs.Address
     } });
-export const MarketStateSwapEvent = new MoveStruct({ name: `${$moduleName}::MarketStateSwapEvent`, fields: {
+export const MarketSwapEvent = new MoveStruct({ name: `${$moduleName}::MarketSwapEvent`, fields: {
         market_state_id: bcs.Address,
         is_pt_to_sy: bcs.bool(),
         amount_in: bcs.u64(),
@@ -194,7 +195,7 @@ export const MarketStateSwapEvent = new MoveStruct({ name: `${$moduleName}::Mark
         reserve_fee: bcs.u64(),
         trader: bcs.Address
     } });
-export const MarketStateImpliedRateUpdatedEvent = new MoveStruct({ name: `${$moduleName}::MarketStateImpliedRateUpdatedEvent`, fields: {
+export const MarketImpliedRateUpdatedEvent = new MoveStruct({ name: `${$moduleName}::MarketImpliedRateUpdatedEvent`, fields: {
         market_state_id: bcs.Address,
         ln_implied_rate_raw: bcs.u128(),
         pt_price_raw: bcs.u128(),
@@ -202,29 +203,35 @@ export const MarketStateImpliedRateUpdatedEvent = new MoveStruct({ name: `${$mod
         total_sy: bcs.u64(),
         lp_supply: bcs.u64()
     } });
-export const MarketStateRewardDistributorRequiredEvent = new MoveStruct({ name: `${$moduleName}::MarketStateRewardDistributorRequiredEvent`, fields: {
+export const MarketRewardDistributorRequiredEvent = new MoveStruct({ name: `${$moduleName}::MarketRewardDistributorRequiredEvent`, fields: {
         market_state_id: bcs.Address,
         distributor_id: bcs.Address
     } });
-export const MarketStateReserveFeeCollectedEvent = new MoveStruct({ name: `${$moduleName}::MarketStateReserveFeeCollectedEvent`, fields: {
+export const MarketReserveFeeCollectedEvent = new MoveStruct({ name: `${$moduleName}::MarketReserveFeeCollectedEvent`, fields: {
         market_state_id: bcs.Address,
         treasury: bcs.Address,
         amount: bcs.u64(),
         collector: bcs.Address
     } });
-export const MarketStateTreasuryInterestCollectedEvent = new MoveStruct({ name: `${$moduleName}::MarketStateTreasuryInterestCollectedEvent`, fields: {
+export const MarketTreasuryInterestCollectedEvent = new MoveStruct({ name: `${$moduleName}::MarketTreasuryInterestCollectedEvent`, fields: {
         market_state_id: bcs.Address,
         treasury: bcs.Address,
         amount: bcs.u64(),
         dust_remainder_raw: bcs.u128(),
         collector: bcs.Address
     } });
-export const MarketStateMarketCapUpdatedEvent = new MoveStruct({ name: `${$moduleName}::MarketStateMarketCapUpdatedEvent`, fields: {
+export const MarketTreasuryUpdatedEvent = new MoveStruct({ name: `${$moduleName}::MarketTreasuryUpdatedEvent`, fields: {
+        market_state_id: bcs.Address,
+        previous_treasury: bcs.Address,
+        treasury: bcs.Address,
+        actor: bcs.Address
+    } });
+export const MarketMarketCapUpdatedEvent = new MoveStruct({ name: `${$moduleName}::MarketMarketCapUpdatedEvent`, fields: {
         market_state_id: bcs.Address,
         market_cap: bcs.u64(),
         actor: bcs.Address
     } });
-export const MarketStateAssetMarketCapUpdatedEvent = new MoveStruct({ name: `${$moduleName}::MarketStateAssetMarketCapUpdatedEvent`, fields: {
+export const MarketAssetMarketCapUpdatedEvent = new MoveStruct({ name: `${$moduleName}::MarketAssetMarketCapUpdatedEvent`, fields: {
         market_state_id: bcs.Address,
         asset_market_cap: bcs.u64(),
         sy_index_raw: bcs.u128(),
@@ -277,7 +284,7 @@ export const CoinAuthoritySnapshot = new MoveStruct({ name: `${$moduleName}::Coi
         pt_total_supply: bcs.u64(),
         yt_total_supply: bcs.u64()
     } });
-export const MarketStateSnapshot = new MoveStruct({ name: `${$moduleName}::MarketStateSnapshot`, fields: {
+export const MarketSnapshot = new MoveStruct({ name: `${$moduleName}::MarketSnapshot`, fields: {
         market_state_id: bcs.Address,
         expiry: bcs.u64(),
         price_aggregator_id: bcs.Address,
@@ -373,7 +380,7 @@ export function createByAdminCap(options: CreateByAdminCapOptions) {
     const parameterNames = ["AdminCap", "globalConfig", "expiry", "interestFeeRate", "expiryDivisor", "treasury", "scalarRoot", "initialAnchor", "lnFeeRateRoot", "protocolFeeRate", "marketCap", "assetMarketCap", "syTreasury", "ptTreasury", "ytTreasury"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'create_by_admin_cap',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -416,7 +423,7 @@ export function bindPriceAggregatorByAdmin(options: BindPriceAggregatorByAdminOp
     const parameterNames = ["state", "globalConfig", "AdminCap", "priceAggregator"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'bind_price_aggregator_by_admin',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -451,7 +458,7 @@ export function createRewardDistributorByAdmin(options: CreateRewardDistributorB
     const parameterNames = ["state", "globalConfig", "AdminCap"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'create_reward_distributor_by_admin',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -491,7 +498,7 @@ export function collectReserveFeesByAdmin(options: CollectReserveFeesByAdminOpti
     const parameterNames = ["state", "globalConfig", "AdminCap"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'collect_reserve_fees_by_admin',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -520,9 +527,9 @@ export interface CollectTreasuryInterestByAdminOptions {
 /**
  * Checkpoint and transfer pending interest fees to the configured treasury.
  *
- * Before expiry, `price_info_opt` must contain a fresh price for this MarketState.
- * Once the market is settled, callers pass `none` and collection uses the
- * immutable settlement index.
+ * Before expiry, `price_info_opt` must contain a fresh price for this Market. Once
+ * the market is settled, callers pass `none` and collection uses the immutable
+ * settlement index.
  */
 export function collectTreasuryInterestByAdmin(options: CollectTreasuryInterestByAdminOptions) {
     const packageAddress = options.package ?? 'jitter/jitter';
@@ -536,7 +543,7 @@ export function collectTreasuryInterestByAdmin(options: CollectTreasuryInterestB
     const parameterNames = ["state", "globalConfig", "priceInfoOpt", "AdminCap"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'collect_treasury_interest_by_admin',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -580,8 +587,46 @@ export function collectTreasuryInterestByAcl(options: CollectTreasuryInterestByA
     const parameterNames = ["state", "globalConfig", "priceInfoOpt", "acl"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'collect_treasury_interest_by_acl',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface SetTreasuryByAdminArguments {
+    state: RawTransactionArgument<string>;
+    globalConfig: RawTransactionArgument<string>;
+    AdminCap: RawTransactionArgument<string>;
+    treasury: RawTransactionArgument<string>;
+}
+export interface SetTreasuryByAdminOptions {
+    package?: string;
+    arguments: SetTreasuryByAdminArguments | [
+        state: RawTransactionArgument<string>,
+        globalConfig: RawTransactionArgument<string>,
+        AdminCap: RawTransactionArgument<string>,
+        treasury: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+/** Rotates the recipient of protocol revenue without modifying user backing. */
+export function setTreasuryByAdmin(options: SetTreasuryByAdminOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter';
+    const argumentsTypes = [
+        null,
+        null,
+        null,
+        'address'
+    ] satisfies (string | null)[];
+    const parameterNames = ["state", "globalConfig", "AdminCap", "treasury"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market',
+        function: 'set_treasury_by_admin',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });
@@ -617,7 +662,7 @@ export function setMarketCapByAdmin(options: SetMarketCapByAdminOptions) {
     const parameterNames = ["state", "globalConfig", "marketCap", "AdminCap"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'set_market_cap_by_admin',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -657,7 +702,7 @@ export function setAssetMarketCapByAdmin(options: SetAssetMarketCapByAdminOption
     const parameterNames = ["state", "globalConfig", "assetMarketCap", "syIndexRaw", "AdminCap"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'set_asset_market_cap_by_admin',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -685,7 +730,7 @@ export function id(options: IdOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'id',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -713,7 +758,7 @@ export function expiry(options: ExpiryOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'expiry',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -741,7 +786,7 @@ export function priceAggregatorId(options: PriceAggregatorIdOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'price_aggregator_id',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -769,7 +814,7 @@ export function syTypeName(options: SyTypeNameOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'sy_type_name',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -797,7 +842,7 @@ export function ptTypeName(options: PtTypeNameOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'pt_type_name',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -825,7 +870,7 @@ export function ytTypeName(options: YtTypeNameOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'yt_type_name',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -862,7 +907,7 @@ export function burnPtIn(options: BurnPtInOptions) {
     const parameterNames = ["ptCoin", "position", "globalConfig", "state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'burn_pt_in',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -900,7 +945,7 @@ export function redeemPtOut(options: RedeemPtOutOptions) {
     const parameterNames = ["amount", "position", "globalConfig", "state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'redeem_pt_out',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -928,7 +973,7 @@ export function syTreasuryId(options: SyTreasuryIdOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'sy_treasury_id',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -956,7 +1001,7 @@ export function ptTreasuryId(options: PtTreasuryIdOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'pt_treasury_id',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -984,7 +1029,7 @@ export function ytTreasuryId(options: YtTreasuryIdOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'yt_treasury_id',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -1012,7 +1057,7 @@ export function rewardDistributorRequired(options: RewardDistributorRequiredOpti
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'reward_distributor_required',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -1040,7 +1085,7 @@ export function rewardDistributorId(options: RewardDistributorIdOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'reward_distributor_id',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -1068,7 +1113,7 @@ export function poolRewardGateOpen(options: PoolRewardGateOpenOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'pool_reward_gate_open',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -1096,7 +1141,7 @@ export function ytRewardGateOpen(options: YtRewardGateOpenOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'yt_reward_gate_open',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -1124,7 +1169,7 @@ export function poolRewardGuard(options: PoolRewardGuardOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'pool_reward_guard',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -1152,7 +1197,7 @@ export function ytRewardGuard(options: YtRewardGuardOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'yt_reward_guard',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -1180,7 +1225,7 @@ export function lpRewardGuard(options: LpRewardGuardOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'lp_reward_guard',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -1208,7 +1253,7 @@ export function isSettled(options: IsSettledOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'is_settled',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -1236,7 +1281,7 @@ export function settledPyIndex(options: SettledPyIndexOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'settled_py_index',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -1264,7 +1309,7 @@ export function snapshot(options: SnapshotOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -1287,7 +1332,7 @@ export function snapshotMarketStateId(options: SnapshotMarketStateIdOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_market_state_id',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1309,7 +1354,7 @@ export function snapshotExpiry(options: SnapshotExpiryOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_expiry',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1331,7 +1376,7 @@ export function snapshotPriceAggregatorId(options: SnapshotPriceAggregatorIdOpti
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_price_aggregator_id',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1353,7 +1398,7 @@ export function snapshotRewardDistributorId(options: SnapshotRewardDistributorId
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_reward_distributor_id',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1375,7 +1420,7 @@ export function snapshotSyTreasuryId(options: SnapshotSyTreasuryIdOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_sy_treasury_id',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1397,7 +1442,7 @@ export function snapshotSyTotalSupply(options: SnapshotSyTotalSupplyOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_sy_total_supply',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1419,7 +1464,7 @@ export function snapshotPtTreasuryId(options: SnapshotPtTreasuryIdOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_pt_treasury_id',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1441,7 +1486,7 @@ export function snapshotPtTotalSupply(options: SnapshotPtTotalSupplyOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_pt_total_supply',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1463,7 +1508,7 @@ export function snapshotYtTreasuryId(options: SnapshotYtTreasuryIdOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_yt_treasury_id',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1485,7 +1530,7 @@ export function snapshotYtTotalSupply(options: SnapshotYtTotalSupplyOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_yt_total_supply',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1507,7 +1552,7 @@ export function snapshotPtSupply(options: SnapshotPtSupplyOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_pt_supply',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1529,7 +1574,7 @@ export function snapshotYtSupply(options: SnapshotYtSupplyOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_yt_supply',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1551,7 +1596,7 @@ export function snapshotPySyBalance(options: SnapshotPySyBalanceOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_py_sy_balance',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1573,7 +1618,7 @@ export function snapshotPyIndexStored(options: SnapshotPyIndexStoredOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_py_index_stored',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1595,7 +1640,7 @@ export function snapshotGlobalInterestIndex(options: SnapshotGlobalInterestIndex
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_global_interest_index',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1617,7 +1662,7 @@ export function snapshotTotalTreasuryInterestRaw(options: SnapshotTotalTreasuryI
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_total_treasury_interest_raw',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1639,7 +1684,7 @@ export function snapshotIsSettled(options: SnapshotIsSettledOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_is_settled',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1661,7 +1706,7 @@ export function snapshotSettledPyIndex(options: SnapshotSettledPyIndexOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_settled_py_index',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1683,7 +1728,7 @@ export function snapshotPoolSyBalance(options: SnapshotPoolSyBalanceOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_pool_sy_balance',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1705,7 +1750,7 @@ export function snapshotTotalPt(options: SnapshotTotalPtOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_total_pt',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1727,7 +1772,7 @@ export function snapshotReserveFeeBalance(options: SnapshotReserveFeeBalanceOpti
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_reserve_fee_balance',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1749,7 +1794,7 @@ export function snapshotProtocolFeeRemainderRaw(options: SnapshotProtocolFeeRema
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_protocol_fee_remainder_raw',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1771,7 +1816,7 @@ export function snapshotLpSupply(options: SnapshotLpSupplyOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_lp_supply',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1793,7 +1838,7 @@ export function snapshotPoolStatus(options: SnapshotPoolStatusOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_pool_status',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1815,7 +1860,7 @@ export function snapshotPoolGeneration(options: SnapshotPoolGenerationOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_pool_generation',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1837,7 +1882,7 @@ export function snapshotTreasury(options: SnapshotTreasuryOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_treasury',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1859,7 +1904,7 @@ export function snapshotInterestFeeRate(options: SnapshotInterestFeeRateOptions)
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_interest_fee_rate',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1881,7 +1926,7 @@ export function snapshotExpiryDivisor(options: SnapshotExpiryDivisorOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_expiry_divisor',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1903,7 +1948,7 @@ export function snapshotMarketCap(options: SnapshotMarketCapOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_market_cap',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1925,7 +1970,7 @@ export function snapshotAssetMarketCap(options: SnapshotAssetMarketCapOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_asset_market_cap',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1947,7 +1992,7 @@ export function snapshotPyIndexGuard(options: SnapshotPyIndexGuardOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_py_index_guard',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1969,7 +2014,7 @@ export function pyIndexGuardMode(options: PyIndexGuardModeOptions) {
     const parameterNames = ["guard"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'py_index_guard_mode',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -1991,7 +2036,7 @@ export function pyIndexGuardMaxStepGrowthBps(options: PyIndexGuardMaxStepGrowthB
     const parameterNames = ["guard"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'py_index_guard_max_step_growth_bps',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -2013,7 +2058,7 @@ export function pyIndexGuardMaxWindowGrowthBps(options: PyIndexGuardMaxWindowGro
     const parameterNames = ["guard"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'py_index_guard_max_window_growth_bps',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -2035,7 +2080,7 @@ export function pyIndexGuardWindowMs(options: PyIndexGuardWindowMsOptions) {
     const parameterNames = ["guard"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'py_index_guard_window_ms',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -2057,7 +2102,7 @@ export function pyIndexGuardAnchorIndexRaw(options: PyIndexGuardAnchorIndexRawOp
     const parameterNames = ["guard"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'py_index_guard_anchor_index_raw',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -2079,7 +2124,7 @@ export function pyIndexGuardAnchorTimestampMs(options: PyIndexGuardAnchorTimesta
     const parameterNames = ["guard"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'py_index_guard_anchor_timestamp_ms',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -2101,7 +2146,7 @@ export function snapshotYtRewardGuard(options: SnapshotYtRewardGuardOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_yt_reward_guard',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -2123,7 +2168,7 @@ export function snapshotLpRewardGuard(options: SnapshotLpRewardGuardOptions) {
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_lp_reward_guard',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -2145,7 +2190,7 @@ export function snapshotPoolRewardGuard(options: SnapshotPoolRewardGuardOptions)
     const parameterNames = ["snapshot"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'snapshot_pool_reward_guard',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
@@ -2178,7 +2223,7 @@ export function calcPyAmountForSy(options: CalcPyAmountForSyOptions) {
     const parameterNames = ["syAmount", "syIndexRaw", "state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'calc_py_amount_for_sy',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2212,7 +2257,7 @@ export function calcSyAmountForPy(options: CalcSyAmountForPyOptions) {
     const parameterNames = ["pyAmount", "syIndexRaw", "state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'calc_sy_amount_for_py',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2250,7 +2295,7 @@ export function quotePyMint(options: QuotePyMintOptions) {
     const parameterNames = ["minPyOut", "syIndexRaw", "state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'quote_py_mint',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2281,7 +2326,7 @@ export function currentPyIndexRaw(options: CurrentPyIndexRawOptions) {
     const parameterNames = ["syIndexRaw", "state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'current_py_index_raw',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2313,8 +2358,86 @@ export function spotPtPriceInSy(options: SpotPtPriceInSyOptions) {
     const parameterNames = ["state", "syIndexRaw"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'spot_pt_price_in_sy',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface QuoteLpSySwapArguments {
+    totalSyIn: RawTransactionArgument<number | bigint>;
+    state: RawTransactionArgument<string>;
+    syIndexRaw: RawTransactionArgument<number | bigint>;
+}
+export interface QuoteLpSySwapOptions {
+    package?: string;
+    arguments: QuoteLpSySwapArguments | [
+        totalSyIn: RawTransactionArgument<number | bigint>,
+        state: RawTransactionArgument<string>,
+        syIndexRaw: RawTransactionArgument<number | bigint>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+/**
+ * Quote the exact PT output and SY input for a single-SY LP remainder. The solver
+ * searches directly in PT space and returns the projected LP out.
+ */
+export function quoteLpSySwap(options: QuoteLpSySwapOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter';
+    const argumentsTypes = [
+        'u64',
+        null,
+        'u128',
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["totalSyIn", "state", "syIndexRaw"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market',
+        function: 'quote_lp_sy_swap',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface QuoteNonKeepYtSplitArguments {
+    preferredSyToMint: RawTransactionArgument<number | bigint>;
+    state: RawTransactionArgument<string>;
+    syIndexRaw: RawTransactionArgument<number | bigint>;
+}
+export interface QuoteNonKeepYtSplitOptions {
+    package?: string;
+    arguments: QuoteNonKeepYtSplitArguments | [
+        preferredSyToMint: RawTransactionArgument<number | bigint>,
+        state: RawTransactionArgument<string>,
+        syIndexRaw: RawTransactionArgument<number | bigint>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+/**
+ * Return the deepest non-keep-YT mint split whose YT sale can repay the matching
+ * PT leg without exceeding the keep-YT liquidity split.
+ */
+export function quoteNonKeepYtSplit(options: QuoteNonKeepYtSplitOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter';
+    const argumentsTypes = [
+        'u64',
+        null,
+        'u128',
+        '0x2::clock::Clock'
+    ] satisfies (string | null)[];
+    const parameterNames = ["preferredSyToMint", "state", "syIndexRaw"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market',
+        function: 'quote_non_keep_yt_split',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });
@@ -2348,7 +2471,7 @@ export function quoteExactPtForSy(options: QuoteExactPtForSyOptions) {
     const parameterNames = ["ptIn", "state", "syIndexRaw"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'quote_exact_pt_for_sy',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2392,7 +2515,7 @@ export function quoteRemoveLiquidityToSy(options: QuoteRemoveLiquidityToSyOption
     const parameterNames = ["lpAmountValue", "state", "syIndexRaw"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'quote_remove_liquidity_to_sy',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2427,7 +2550,7 @@ export function quotePtForExactSy(options: QuotePtForExactSyOptions) {
     const parameterNames = ["syOut", "state", "syIndexRaw"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'quote_pt_for_exact_sy',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2462,7 +2585,7 @@ export function quoteSyForExactPt(options: QuoteSyForExactPtOptions) {
     const parameterNames = ["ptOut", "state", "syIndexRaw"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'quote_sy_for_exact_pt',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2501,7 +2624,7 @@ export function quoteSyForExactYt(options: QuoteSyForExactYtOptions) {
     const parameterNames = ["minYtOut", "state", "syIndexRaw"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'quote_sy_for_exact_yt',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2540,7 +2663,7 @@ export function quoteExactSyForYt(options: QuoteExactSyForYtOptions) {
     const parameterNames = ["syIn", "state", "syIndexRaw"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'quote_exact_sy_for_yt',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2586,7 +2709,7 @@ export function quoteYtForExactSy(options: QuoteYtForExactSyOptions) {
     const parameterNames = ["syOut", "maxYtIn", "state", "syIndexRaw"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'quote_yt_for_exact_sy',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2614,7 +2737,7 @@ export function totalPoolSy(options: TotalPoolSyOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'total_pool_sy',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2642,7 +2765,7 @@ export function totalPoolPt(options: TotalPoolPtOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'total_pool_pt',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2670,7 +2793,7 @@ export function lpSupply(options: LpSupplyOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'lp_supply',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2698,7 +2821,7 @@ export function poolStatus(options: PoolStatusOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'pool_status',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2726,7 +2849,7 @@ export function poolGeneration(options: PoolGenerationOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'pool_generation',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2741,7 +2864,7 @@ export function poolUninitialized(options: PoolUninitializedOptions = {}) {
     const packageAddress = options.package ?? 'jitter/jitter';
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'pool_uninitialized',
     });
 }
@@ -2754,7 +2877,7 @@ export function poolActive(options: PoolActiveOptions = {}) {
     const packageAddress = options.package ?? 'jitter/jitter';
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'pool_active',
     });
 }
@@ -2767,7 +2890,7 @@ export function poolEmpty(options: PoolEmptyOptions = {}) {
     const packageAddress = options.package ?? 'jitter/jitter';
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'pool_empty',
     });
 }
@@ -2793,7 +2916,7 @@ export function isPoolActive(options: IsPoolActiveOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'is_pool_active',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2822,7 +2945,7 @@ export function circulatingLpSupply(options: CirculatingLpSupplyOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'circulating_lp_supply',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2850,7 +2973,7 @@ export function ytSupply(options: YtSupplyOptions) {
     const parameterNames = ["state"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'yt_supply',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
@@ -2885,8 +3008,36 @@ export function quoteExactSyForPt(options: QuoteExactSyForPtOptions) {
     const parameterNames = ["syIn", "state", "syIndexRaw"];
     return (tx: Transaction) => tx.moveCall({
         package: packageAddress,
-        module: 'market_state',
+        module: 'market',
         function: 'quote_exact_sy_for_pt',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+        typeArguments: options.typeArguments
+    });
+}
+export interface InterestDustArguments {
+    state: RawTransactionArgument<string>;
+}
+export interface InterestDustOptions {
+    package?: string;
+    arguments: InterestDustArguments | [
+        state: RawTransactionArgument<string>
+    ];
+    typeArguments: [
+        string,
+        string,
+        string
+    ];
+}
+export function interestDust(options: InterestDustOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter';
+    const argumentsTypes = [
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["state"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'market',
+        function: 'interest_dust',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
         typeArguments: options.typeArguments
     });

@@ -1,6 +1,16 @@
 /** Query helpers and query result types. */
 
 export {
+  createPointConfigReader,
+  getOwnedClosedPointClaims,
+  getOwnedDeferredReferralClaims,
+  isClosedPointPositionArchived,
+  resolveLiquidlinkPointConfig,
+} from "../infrastructure/point-claims-reader.js";
+export type { PointConfigReader, PointConfigSnapshot, PointClaimsGrpcReader, ClosedPointMarkerGrpcReader } from "../infrastructure/point-claims-reader.js";
+export type { ClosedPointClaim, DeferredReferralClaim } from "../point-claims.js";
+
+export {
   getUserPyPositions,
   getUserLpPositions,
   getUserCoins,
@@ -20,7 +30,7 @@ export {
   getLiquidlinkScoreInfo,
   getLiquidlinkLeaderboard,
   listJitterMarkets,
-  queryMarketStateCreatedEvents,
+  queryMarketCreatedEvents,
   queryPoolCreatedEvents,
   queryPyStateCreatedEvents,
   querySwapEvents,
@@ -31,8 +41,8 @@ export {
   getPoolActivity,
   queryImpliedRateEvents,
   queryInterestCollectedEvents,
-  queryMarketStateReserveFeeCollectedEvents,
-  queryMarketStateTreasuryInterestCollectedEvents,
+  queryMarketReserveFeeCollectedEvents,
+  queryMarketTreasuryInterestCollectedEvents,
   queryScallopQuoteCollectedEvents,
   queryTreasuryInterestCollectedEvents,
   fp64ToFloat,
@@ -40,7 +50,7 @@ export {
   calcImpliedApy,
 } from "../queries.js";
 export type {
-  MarketStateCreatedEvent,
+  MarketCreatedEvent,
   PoolCreatedEvent,
   PyStateCreatedEvent,
   SwapEvent,
@@ -54,8 +64,8 @@ export type {
   PoolImpliedRatePoint,
   PoolVolumeStats,
   InterestCollectedEvent,
-  MarketStateReserveFeeCollectedEvent,
-  MarketStateTreasuryInterestCollectedEvent,
+  MarketReserveFeeCollectedEvent,
+  MarketTreasuryInterestCollectedEvent,
   TreasuryInterestCollectedEvent,
   UnderlyingApyPoint,
   ScallopMarketBalanceSheet,

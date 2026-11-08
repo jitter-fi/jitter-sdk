@@ -20,7 +20,7 @@ export type JitterContractSurface = {
   adapters: readonly JitterContractAdapterSurface[];
   objects: {
     CoinAuthority: JitterContractObjectSurface;
-    MarketState: JitterContractObjectSurface;
+    Market: JitterContractObjectSurface;
     SettlementState: JitterContractObjectSurface;
     RiskConfig: JitterContractObjectSurface;
     PyIndexGuard: JitterContractObjectSurface;
@@ -59,15 +59,15 @@ export const JITTER_CONTRACT_SURFACE = {
   ],
   objects: {
     CoinAuthority: {
-      source: "contract/jitter/sources/protocol/market_state.move",
+      source: "contract/jitter/sources/protocol/market.move",
       fields: [
         "sy_treasury",
         "pt_treasury",
         "yt_treasury",
       ],
     },
-    MarketState: {
-      source: "contract/jitter/sources/protocol/market_state.move",
+    Market: {
+      source: "contract/jitter/sources/protocol/market.move",
       fields: [
         "id",
         "expiry",
@@ -82,7 +82,7 @@ export const JITTER_CONTRACT_SURFACE = {
         "py_sy_balance",
         "py_index_stored",
         "py_index_last_updated",
-        "last_collect_interest_index",
+        "interest_segment",
         "total_treasury_interest",
         "last_interest_timestamp",
         "global_interest_index",
@@ -104,14 +104,14 @@ export const JITTER_CONTRACT_SURFACE = {
       ],
     },
     SettlementState: {
-      source: "contract/jitter/sources/protocol/market_state.move",
+      source: "contract/jitter/sources/protocol/market.move",
       fields: [
         "is_settled",
         "settled_py_index",
       ],
     },
     RiskConfig: {
-      source: "contract/jitter/sources/protocol/market_state.move",
+      source: "contract/jitter/sources/protocol/market.move",
       fields: [
         "treasury",
         "interest_fee_rate",
@@ -122,7 +122,7 @@ export const JITTER_CONTRACT_SURFACE = {
       ],
     },
     PyIndexGuard: {
-      source: "contract/jitter/sources/protocol/market_state.move",
+      source: "contract/jitter/sources/protocol/market.move",
       fields: [
         "mode",
         "max_step_growth_bps",
@@ -133,7 +133,7 @@ export const JITTER_CONTRACT_SURFACE = {
       ],
     },
     RewardState: {
-      source: "contract/jitter/sources/protocol/market_state.move",
+      source: "contract/jitter/sources/protocol/market.move",
       fields: [
         "pool_reward_guard",
         "yt_reward_guard",

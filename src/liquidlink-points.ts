@@ -5,6 +5,8 @@ import type {
 } from "@mysten/sui/transactions";
 
 import type { JitterMarketConfig } from "./types.js";
+import type { ClosedPointClaim, DeferredReferralClaim } from "./point-claims.js";
+import { normalizeSuiAddress } from "@mysten/sui/utils";
 
 type LiquidlinkPointScope = "yt" | "lp" | "pool";
 
@@ -14,6 +16,7 @@ export type LiquidlinkPointCheckpointVersion = bigint | number | string;
 const MOVE_U64_MAX = (1n << 64n) - 1n;
 
 type LiquidlinkPointProgramRuntime = {
+  closed: boolean;
   extensionsPackageId: string;
   globalConfigObjectId: string;
   liquidlinkPackageId: string;
@@ -49,17 +52,21 @@ function configuredLiquidlinkPointPrograms(
 ): LiquidlinkPointProgramRuntime[] {
   const liquidlink = config.liquidlink;
   if (!config.jitterExtensionsPackageId || !liquidlink) return [];
-  if (liquidlink.enabled === false) return [];
-  if (!liquidlink.liquidlinkGlobalConfigObjectId || !config.globalConfigObjectId) {
+  const hasClosed = liquidlink.closed || liquidlink.pointPrograms?.some(program => program.closed);
+  if (liquidlink.enabled === false && !hasClosed) return [];
+  const allClosed = liquidlink.pointPrograms?.length
+    ? liquidlink.pointPrograms.filter(program => program.closed || (liquidlink.enabled !== false && program.enabled !== false)).every(program => program.closed)
+    : liquidlink.closed;
+  if ((!allClosed && !liquidlink.liquidlinkGlobalConfigObjectId) || !config.globalConfigObjectId) {
     return [];
   }
-  if (!liquidlink.liquidlinkPackageId) {
+  if (!allClosed && !liquidlink.liquidlinkPackageId) {
     throw new Error("LiquidLink points require liquidlinkPackageId in market config.");
   }
 
   if (liquidlink.pointPrograms?.length) {
     const programs = liquidlink.pointPrograms.flatMap((program) => {
-      if (program.enabled === false) return [];
+      if (!program.closed && (liquidlink.enabled === false || program.enabled === false)) return [];
       const scopes = program.scopes
         ?? (program.lpPointStateObjectId
           ? ["yt", "lp", "pool"] as LiquidlinkPointScope[]
@@ -82,6 +89,7 @@ function configuredLiquidlinkPointPrograms(
         );
       }
       return [{
+        closed: program.closed === true,
         extensionsPackageId: config.jitterExtensionsPackageId!,
         globalConfigObjectId: config.globalConfigObjectId!,
         liquidlinkPackageId: liquidlink.liquidlinkPackageId!,
@@ -116,17 +124,18 @@ function configuredLiquidlinkPointPrograms(
   const projectObjectId = liquidlink.projectObjectId;
   const enabled =
     liquidlink.enabled ?? Boolean(pointConfigObjectId && scoreboardObjectId);
-  if (!enabled || !pointConfigObjectId || !scoreboardObjectId) return [];
+  if ((!enabled && !liquidlink.closed) || !pointConfigObjectId || !scoreboardObjectId) return [];
   if (!projectObjectId) {
     throw new Error("LiquidLink points require projectObjectId in market config.");
   }
 
   return [{
+    closed: liquidlink.closed === true,
     extensionsPackageId: config.jitterExtensionsPackageId,
     globalConfigObjectId: config.globalConfigObjectId,
-    liquidlinkPackageId: liquidlink.liquidlinkPackageId,
+    liquidlinkPackageId: liquidlink.liquidlinkPackageId!,
     liquidlinkGlobalConfigObjectId:
-      liquidlink.liquidlinkGlobalConfigObjectId,
+      liquidlink.liquidlinkGlobalConfigObjectId!,
     projectObjectId,
     pointConfigObjectId,
     scoreboardObjectId,
@@ -145,14 +154,6 @@ function requireLiquidlinkPointPrograms(
 ): LiquidlinkPointProgramRuntime[] {
   if (!config.jitterExtensionsPackageId) {
     throw new Error("LiquidLink points require jitterExtensionsPackageId in market config.");
-  }
-  if (!config.liquidlink?.liquidlinkGlobalConfigObjectId) {
-    throw new Error(
-      "LiquidLink points require liquidlinkGlobalConfigObjectId in market config.",
-    );
-  }
-  if (!config.liquidlink?.liquidlinkPackageId) {
-    throw new Error("LiquidLink points require liquidlinkPackageId in market config.");
   }
   if (!config.globalConfigObjectId) {
     throw new Error("LiquidLink points require globalConfigObjectId in market config.");
@@ -254,6 +255,44 @@ function applyLpReferralPolicy(
   });
 }
 
+function applyGenericReferralPolicy(
+  tx: Transaction,
+  liquidlink: LiquidlinkPointProgramRuntime,
+  stamp: TransactionArgument,
+): void {
+  if (!liquidlink.referral) return;
+
+  tx.moveCall({
+    target: `${requireReferralPackageId(liquidlink)}::referral_policy::apply_policy`,
+    arguments: [
+      tx.object(liquidlink.globalConfigObjectId),
+      tx.object(liquidlink.liquidlinkGlobalConfigObjectId),
+      tx.object(liquidlink.projectObjectId),
+      tx.object(liquidlink.referral.policyStateObjectId),
+      tx.object(liquidlink.referral.referralTableObjectId),
+      stamp,
+    ],
+  });
+}
+
+function completeReferralPolicy(
+  tx: Transaction,
+  liquidlink: LiquidlinkPointProgramRuntime,
+  stamp: TransactionArgument,
+  referralRecordObjectId: string | undefined,
+  scope: "yt" | "lp",
+): void {
+  if (referralRecordObjectId) {
+    if (scope === "yt") {
+      applyYtReferralPolicy(tx, liquidlink, referralRecordObjectId, stamp);
+    } else {
+      applyLpReferralPolicy(tx, liquidlink, referralRecordObjectId, stamp);
+    }
+    return;
+  }
+  applyGenericReferralPolicy(tx, liquidlink, stamp);
+}
+
 function requireReferralPackageId(liquidlink: LiquidlinkPointProgramRuntime): string {
   const packageId = liquidlink.referralPackageId;
   if (!packageId) {
@@ -268,6 +307,49 @@ function marketStateObjectId(config: JitterMarketConfig): string {
 
 function marketStateTypeArgs(config: JitterMarketConfig): [string, string, string] {
   return [config.syTypeTag, config.ptTypeTag, config.ytTypeTag];
+}
+
+function addClosedPointCheckpoint(
+  tx: Transaction,
+  config: JitterMarketConfig,
+  program: LiquidlinkPointProgramRuntime,
+  scope: "yt" | "lp",
+  position: TransactionObjectArgument,
+  referralRecordObjectId?: string,
+  operation?: TransactionArgument,
+): void {
+  const sourceArgs = [tx.object(program.pointConfigObjectId),
+    ...(scope === "lp" ? [tx.object(program.lpPointStateObjectId!)] : [])];
+  if (referralRecordObjectId && !program.referral) {
+    throw new Error(`Referral is not configured for PointConfig ${program.pointConfigObjectId}.`);
+  }
+  tx.moveCall({
+    target: `${program.extensionsPackageId}::liquidlink_points::${operation ? "settle" : "checkpoint"}_closed_${scope}${referralRecordObjectId ? "_with_referral" : ""}`,
+    typeArguments: marketStateTypeArgs(config),
+    arguments: [
+      ...(operation
+        ? [tx.object(program.globalConfigObjectId), ...sourceArgs, tx.object(requireRewardDistributor(config)), operation]
+        : [...sourceArgs, tx.object(program.globalConfigObjectId)]),
+      ...(referralRecordObjectId ? [tx.object(program.referral!.policyStateObjectId), tx.object(referralRecordObjectId)] : []),
+      position,
+      tx.object(marketStateObjectId(config)),
+      tx.object.clock(),
+    ],
+  });
+}
+
+/** Archive one closed scope. The receipt is owned by the original position owner. */
+export function addCheckpointClosedPoints(
+  tx: Transaction,
+  config: JitterMarketConfig,
+  pointConfigObjectId: string,
+  scope: "yt" | "lp",
+  position: TransactionObjectArgument | string,
+  referralRecordObjectId?: string,
+): void {
+  const program = requireLiquidlinkCheckpointProgram(config, scope, pointConfigObjectId);
+  if (!program.closed) throw new Error(`PointConfig ${pointConfigObjectId} is not closed.`);
+  addClosedPointCheckpoint(tx, config, program, scope, asObjectArg(tx, position), referralRecordObjectId);
 }
 
 function checkpointVersion(
@@ -392,7 +474,7 @@ export function addCheckpointLpPointConfigToVersion(
 
 function unsupportedLiquidlinkRoute(): never {
   throw new Error(
-    "Legacy Liquidlink route wrappers were removed from the MarketState contracts. Use createJitterTransactionService so reward settlement is composed through the core router.",
+    "Legacy Liquidlink route wrappers were removed from the Market contracts. Use createJitterTransactionService so reward settlement is composed through the core router.",
   );
 }
 
@@ -990,6 +1072,10 @@ export function addSyncPyPositionWithLiquidlinkPoints(
     }
     const referralRecordObjectId = referralRecordObjectIds[liquidlink.pointConfigObjectId.toLowerCase()]
       ?? referralRecordObjectIds[liquidlink.pointConfigObjectId];
+    if (liquidlink.closed) {
+      addClosedPointCheckpoint(tx, config, liquidlink, "yt", position, referralRecordObjectId);
+      continue;
+    }
     if (referralRecordObjectId && !liquidlink.referral) {
       throw new Error(
         `LiquidLink PointConfig ${liquidlink.pointConfigObjectId} has a YT referral record but no referral policy configuration.`,
@@ -999,7 +1085,7 @@ export function addSyncPyPositionWithLiquidlinkPoints(
       target: `${liquidlink.extensionsPackageId}::liquidlink_points::${
         referralRecordObjectId
           ? "sync_py_position_with_referral_points"
-          : "sync_py_position_with_points"
+          : "checkpoint_yt"
       }`,
       arguments: referralRecordObjectId
         ? [
@@ -1017,15 +1103,14 @@ export function addSyncPyPositionWithLiquidlinkPoints(
             tx.object(liquidlink.pointConfigObjectId),
             tx.object(liquidlink.projectObjectId),
             tx.object(liquidlink.globalConfigObjectId),
+            tx.object(liquidlink.liquidlinkGlobalConfigObjectId),
             position,
             tx.object(marketStateObjectId(config)),
             tx.object.clock(),
           ],
       typeArguments: marketStateTypeArgs(config),
     }) as TransactionArgument;
-    if (referralRecordObjectId) {
-      applyYtReferralPolicy(tx, liquidlink, referralRecordObjectId, stamp);
-    }
+    completeReferralPolicy(tx, liquidlink, stamp, referralRecordObjectId, "yt");
     settleLiquidlinkStamp(tx, liquidlink, stamp);
   }
 }
@@ -1042,6 +1127,10 @@ export function addSettleYtRewardOperationWithLiquidlinkPoints(
   for (const liquidlink of requireLiquidlinkPointPrograms(config, "yt")) {
     const referralRecordObjectId = referralRecordObjectIds[liquidlink.pointConfigObjectId.toLowerCase()]
       ?? referralRecordObjectIds[liquidlink.pointConfigObjectId];
+    if (liquidlink.closed) {
+      addClosedPointCheckpoint(tx, config, liquidlink, "yt", position, referralRecordObjectId, operation);
+      continue;
+    }
     if (referralRecordObjectId && !liquidlink.referral) {
       throw new Error(
         `LiquidLink PointConfig ${liquidlink.pointConfigObjectId} has a YT referral record but no referral policy configuration.`,
@@ -1080,9 +1169,7 @@ export function addSettleYtRewardOperationWithLiquidlinkPoints(
             tx.object.clock(),
           ],
     }) as TransactionArgument;
-    if (referralRecordObjectId) {
-      applyYtReferralPolicy(tx, liquidlink, referralRecordObjectId, stamp);
-    }
+    completeReferralPolicy(tx, liquidlink, stamp, referralRecordObjectId, "yt");
     settleLiquidlinkStamp(tx, liquidlink, stamp);
   }
 }
@@ -1100,6 +1187,10 @@ export function addSettleLpRewardOperationWithLiquidlinkPoints(
     const referralRecordObjectId =
       referralRecordObjectIds[liquidlink.pointConfigObjectId.toLowerCase()]
       ?? referralRecordObjectIds[liquidlink.pointConfigObjectId];
+    if (liquidlink.closed) {
+      addClosedPointCheckpoint(tx, config, liquidlink, "lp", position, referralRecordObjectId, operation);
+      continue;
+    }
     if (referralRecordObjectId && !liquidlink.referral) {
       throw new Error(
         `LiquidLink PointConfig ${liquidlink.pointConfigObjectId} has a referral record but no referral policy configuration.`,
@@ -1140,8 +1231,155 @@ export function addSettleLpRewardOperationWithLiquidlinkPoints(
             tx.object.clock(),
           ],
     }) as TransactionArgument;
+    completeReferralPolicy(tx, liquidlink, stamp, referralRecordObjectId, "lp");
     settleLiquidlinkStamp(tx, liquidlink, stamp);
   }
+}
+
+/** Compose the configured Project policies in their on-chain registration order.
+ * Call confirmReferral at its registered position; the chain enforces completeness.
+ */
+export type LpReferralDetachPolicies = (
+  stamp: TransactionArgument,
+  confirmReferral: () => void,
+) => void;
+
+export type ClosedPointClaimPolicies = LpReferralDetachPolicies;
+const appendedClaims = new WeakMap<Transaction, Set<string>>();
+
+function alreadyClaimed(tx: Transaction, claim: { objectId: string; owner: string; points: string }, includeEmpty = false): boolean {
+  if (!includeEmpty && BigInt(claim.points) === 0n) return true;
+  const sender = tx.getData().sender;
+  if (sender && normalizeSuiAddress(sender) !== normalizeSuiAddress(claim.owner)) {
+    throw new Error("Closed claims must be settled by their original owner.");
+  }
+  return appendedClaims.get(tx)?.has(normalizeSuiAddress(claim.objectId)) ?? false;
+}
+
+function rememberClaim(tx: Transaction, objectId: string): void {
+  const ids = appendedClaims.get(tx) ?? new Set<string>();
+  ids.add(normalizeSuiAddress(objectId));
+  appendedClaims.set(tx, ids);
+}
+
+function requireClaimProgram(config: JitterMarketConfig, claim: ClosedPointClaim | DeferredReferralClaim) {
+  const selected = config.liquidlink?.pointPrograms?.find(program =>
+    normalizeSuiAddress(program.pointConfigObjectId) === normalizeSuiAddress(claim.pointConfigObjectId));
+  // An owned historical right is independent of the live accrual/display toggle.
+  const claimConfig: JitterMarketConfig = { ...config, liquidlink: { ...config.liquidlink, enabled: true,
+    ...(selected ? { pointPrograms: [{ ...selected, enabled: true, closed: true }] } : { closed: true }) } };
+  const program = requireLiquidlinkCheckpointProgram(claimConfig, claim.scope, claim.pointConfigObjectId);
+  if (!program.liquidlinkPackageId || !program.liquidlinkGlobalConfigObjectId) {
+    throw new Error("Closed points remain pending until LiquidLink is available.");
+  }
+  if (normalizeSuiAddress(program.projectObjectId) !== normalizeSuiAddress(claim.projectObjectId)
+    || normalizeSuiAddress(program.scoreboardObjectId) !== normalizeSuiAddress(claim.scoreboardObjectId)) {
+    throw new Error("Closed claim must use its original Project and Scoreboard.");
+  }
+  return program;
+}
+
+/** Claim an owned receipt after any Position deletion, then apply original ordered policies. */
+export function addClaimClosedPoints(
+  tx: Transaction,
+  config: JitterMarketConfig,
+  claim: ClosedPointClaim,
+  applyPolicies: ClosedPointClaimPolicies,
+): boolean {
+  if (alreadyClaimed(tx, claim, true)) return false;
+  const program = requireClaimProgram(config, claim);
+  if (BigInt(claim.points) === 0n) {
+    tx.moveCall({
+      target: `${program.extensionsPackageId}::liquidlink_points::destroy_empty_claim`,
+      arguments: [tx.object(program.globalConfigObjectId), tx.object(program.liquidlinkGlobalConfigObjectId), tx.object(claim.objectId)],
+    });
+    rememberClaim(tx, claim.objectId);
+    return true;
+  }
+  if (claim.referralStateObjectId && (!program.referral
+    || normalizeSuiAddress(program.referral.policyStateObjectId) !== normalizeSuiAddress(claim.referralStateObjectId)
+    || !claim.referralRecordObjectId)) {
+    throw new Error("Closed claim requires its original referral policy state and retained record.");
+  }
+  const stamp = tx.moveCall({
+    target: `${program.extensionsPackageId}::liquidlink_points::claim_closed_points`,
+    arguments: [tx.object(program.globalConfigObjectId), tx.object(program.liquidlinkGlobalConfigObjectId),
+      tx.object(program.pointConfigObjectId), tx.object(program.projectObjectId), tx.object(claim.objectId)],
+  });
+  applyPolicies(stamp, () => completeReferralPolicy(tx, program, stamp, claim.referralRecordObjectId ?? undefined, claim.scope));
+  settleLiquidlinkStamp(tx, program, stamp);
+  rememberClaim(tx, claim.objectId);
+  return true;
+}
+
+/** Referral receipts settle directly, without a stamp result or Position input. */
+export function addClaimArchivedReferral(
+  tx: Transaction,
+  config: JitterMarketConfig,
+  claim: DeferredReferralClaim,
+): boolean {
+  if (alreadyClaimed(tx, claim)) return false;
+  const program = requireClaimProgram(config, claim);
+  tx.moveCall({
+    target: `${requireReferralPackageId(program)}::referral_policy::claim_archived_referral`,
+    arguments: [tx.object(program.globalConfigObjectId), tx.object(program.liquidlinkGlobalConfigObjectId),
+      tx.object(claim.projectObjectId), tx.object(claim.stateObjectId), tx.object(claim.scoreboardObjectId), tx.object(claim.objectId)],
+  });
+  rememberClaim(tx, claim.objectId);
+  return true;
+}
+
+/** Claim, apply policies, settle, then detach in one PTB and one wallet approval. */
+export function addDetachLpReferralWithLiquidlinkPoints(
+  tx: Transaction,
+  config: JitterMarketConfig,
+  pointConfigObjectId: string,
+  position: TransactionObjectArgument | string,
+  referralRecordObjectId: string,
+  applyPolicies: LpReferralDetachPolicies,
+): void {
+  const program = requireLiquidlinkPointPrograms(config, "lp").find(
+    (candidate) => candidate.pointConfigObjectId.toLowerCase() === pointConfigObjectId.toLowerCase(),
+  );
+  if (!program?.referral) {
+    throw new Error(`Referral is not configured for PointConfig ${pointConfigObjectId}.`);
+  }
+  const positionArg = asObjectArg(tx, position);
+  const [, stamp] = tx.moveCall({
+    target: `${program.extensionsPackageId}::liquidlink_points::claim_lp_points_with_referral_points`,
+    typeArguments: marketStateTypeArgs(config),
+    arguments: [
+      tx.object(program.pointConfigObjectId),
+      tx.object(program.lpPointStateObjectId!),
+      tx.object(program.globalConfigObjectId),
+      tx.object(program.liquidlinkGlobalConfigObjectId),
+      tx.object(program.projectObjectId),
+      tx.object(program.referral.policyStateObjectId),
+      tx.object(referralRecordObjectId),
+      tx.object(marketStateObjectId(config)),
+      positionArg,
+      tx.object.clock(),
+    ],
+  });
+  applyPolicies(stamp, () => applyLpReferralPolicy(tx, program, referralRecordObjectId, stamp));
+  settleLiquidlinkStamp(tx, program, stamp);
+  tx.moveCall({
+    target: `${program.extensionsPackageId}::liquidlink_points::detach_lp_referral_record_with_points`,
+    typeArguments: marketStateTypeArgs(config),
+    arguments: [
+      tx.object(program.pointConfigObjectId),
+      tx.object(program.lpPointStateObjectId!),
+      tx.object(program.scoreboardObjectId),
+      tx.object(program.globalConfigObjectId),
+      tx.object(program.liquidlinkGlobalConfigObjectId),
+      tx.object(program.projectObjectId),
+      tx.object(program.referral.policyStateObjectId),
+      tx.object(referralRecordObjectId),
+      tx.object(marketStateObjectId(config)),
+      positionArg,
+      tx.object.clock(),
+    ],
+  });
 }
 
 export function addCreateLpReferralRecordWithLiquidlinkPoints(
@@ -1201,6 +1439,69 @@ export function addCreateYtReferralRecordWithLiquidlinkPoints(
       tx.object.clock(),
     ],
   }) as TransactionObjectArgument;
+}
+
+export function addBindYtReferrerWithLiquidlinkPoints(
+  tx: Transaction,
+  config: JitterMarketConfig,
+  pointConfigObjectId: string,
+  referralRecordObjectId: string,
+  position: TransactionObjectArgument | string,
+): void {
+  const liquidlink = requireLiquidlinkPointPrograms(config, "yt").find(
+    (program) => program.pointConfigObjectId.toLowerCase() === pointConfigObjectId.toLowerCase(),
+  );
+  if (!liquidlink?.referral) {
+    throw new Error(`Referral is not configured for PointConfig ${pointConfigObjectId}.`);
+  }
+  tx.moveCall({
+    target: `${liquidlink.extensionsPackageId}::liquidlink_points::bind_yt_referrer`,
+    typeArguments: marketStateTypeArgs(config),
+    arguments: [
+      tx.object(liquidlink.globalConfigObjectId),
+      tx.object(liquidlink.liquidlinkGlobalConfigObjectId),
+      tx.object(liquidlink.pointConfigObjectId),
+      tx.object(liquidlink.projectObjectId),
+      tx.object(liquidlink.referral.policyStateObjectId),
+      tx.object(liquidlink.referral.referralTableObjectId),
+      tx.object(referralRecordObjectId),
+      tx.object(marketStateObjectId(config)),
+      asObjectArg(tx, position),
+      tx.object.clock(),
+    ],
+  });
+}
+
+export function addBindLpReferrerWithLiquidlinkPoints(
+  tx: Transaction,
+  config: JitterMarketConfig,
+  pointConfigObjectId: string,
+  referralRecordObjectId: string,
+  position: TransactionObjectArgument | string,
+): void {
+  const liquidlink = requireLiquidlinkPointPrograms(config, "lp").find(
+    (program) => program.pointConfigObjectId.toLowerCase() === pointConfigObjectId.toLowerCase(),
+  );
+  if (!liquidlink?.referral || !liquidlink.lpPointStateObjectId) {
+    throw new Error(`Referral LP accounting is not configured for PointConfig ${pointConfigObjectId}.`);
+  }
+  tx.moveCall({
+    target: `${liquidlink.extensionsPackageId}::liquidlink_points::bind_lp_referrer`,
+    typeArguments: marketStateTypeArgs(config),
+    arguments: [
+      tx.object(liquidlink.pointConfigObjectId),
+      tx.object(liquidlink.lpPointStateObjectId),
+      tx.object(liquidlink.globalConfigObjectId),
+      tx.object(liquidlink.liquidlinkGlobalConfigObjectId),
+      tx.object(liquidlink.projectObjectId),
+      tx.object(liquidlink.referral.policyStateObjectId),
+      tx.object(liquidlink.referral.referralTableObjectId),
+      tx.object(referralRecordObjectId),
+      tx.object(marketStateObjectId(config)),
+      asObjectArg(tx, position),
+      tx.object.clock(),
+    ],
+  });
 }
 
 export function addSettlePoolRewardOperationWithLiquidlinkPoints(
@@ -1268,6 +1569,10 @@ export function addClaimLpPointsWithLiquidlinkPoints(
     const referralRecordObjectId =
       referralRecordObjectIds[liquidlink.pointConfigObjectId.toLowerCase()]
       ?? referralRecordObjectIds[liquidlink.pointConfigObjectId];
+    if (liquidlink.closed) {
+      addClosedPointCheckpoint(tx, config, liquidlink, "lp", position, referralRecordObjectId);
+      continue;
+    }
     if (referralRecordObjectId && !liquidlink.referral) {
       throw new Error(
         `LiquidLink PointConfig ${liquidlink.pointConfigObjectId} has an LP referral record but no referral policy configuration.`,
@@ -1278,7 +1583,7 @@ export function addClaimLpPointsWithLiquidlinkPoints(
       target: `${liquidlink.extensionsPackageId}::liquidlink_points::${
         referralRecordObjectId
           ? "claim_lp_points_with_referral_points"
-          : "claim_lp_points_with_points"
+          : "claim_lp_points"
       }`,
       arguments: referralRecordObjectId
         ? [
@@ -1306,9 +1611,7 @@ export function addClaimLpPointsWithLiquidlinkPoints(
       typeArguments: marketStateTypeArgs(config),
     });
     const stamp = result[1] as TransactionArgument;
-    if (referralRecordObjectId) {
-      applyLpReferralPolicy(tx, liquidlink, referralRecordObjectId, stamp);
-    }
+    completeReferralPolicy(tx, liquidlink, stamp, referralRecordObjectId, "lp");
     settleLiquidlinkStamp(tx, liquidlink, stamp);
   }
 }

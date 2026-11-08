@@ -15,6 +15,7 @@ import { MoveStruct, MoveTuple, normalizeMoveArguments, type RawTransactionArgum
 import { bcs, type BcsType } from '@mysten/sui/bcs';
 import { type Transaction } from '@mysten/sui/transactions';
 import * as type_name from './deps/std/type_name.js';
+import * as type_name_1 from './deps/std/type_name.js';
 const $moduleName = 'jitter/jitter::jitter_position';
 export const PyLeg = new MoveStruct({ name: `${$moduleName}::PyLeg`, fields: {
         pt_balance: bcs.u64(),
@@ -44,8 +45,35 @@ export const PositionCreatedEvent = new MoveStruct({ name: `${$moduleName}::Posi
         expiry: bcs.u64(),
         owner: bcs.Address
     } });
+export const PositionTransferredEvent = new MoveStruct({ name: `${$moduleName}::PositionTransferredEvent`, fields: {
+        position_id: bcs.Address,
+        market_id: bcs.Address,
+        recipient: bcs.Address,
+        pt_balance: bcs.u64(),
+        yt_balance: bcs.u64(),
+        lp_amount: bcs.u64(),
+        accrued: bcs.u128()
+    } });
+export const PositionDestroyedEvent = new MoveStruct({ name: `${$moduleName}::PositionDestroyedEvent`, fields: {
+        position_id: bcs.Address,
+        market_id: bcs.Address
+    } });
+export const PositionAccruedMergedEvent = new MoveStruct({ name: `${$moduleName}::PositionAccruedMergedEvent`, fields: {
+        market_id: bcs.Address,
+        source_position_id: bcs.Address,
+        destination_position_id: bcs.Address,
+        amount: bcs.u128(),
+        destination_accrued: bcs.u128()
+    } });
+export const PositionTransferLockUpdatedEvent = new MoveStruct({ name: `${$moduleName}::PositionTransferLockUpdatedEvent`, fields: {
+        position_id: bcs.Address,
+        market_id: bcs.Address,
+        source_id: bcs.Address,
+        witness: type_name.TypeName,
+        locked: bcs.bool()
+    } });
 export const LpRewardGateKey = new MoveTuple({ name: `${$moduleName}::LpRewardGateKey`, fields: [bcs.bool()] });
-export const ScopedTransferLockKey = new MoveTuple({ name: `${$moduleName}::ScopedTransferLockKey`, fields: [type_name.TypeName, bcs.Address] });
+export const ScopedTransferLockKey = new MoveTuple({ name: `${$moduleName}::ScopedTransferLockKey`, fields: [type_name_1.TypeName, bcs.Address] });
 export const TransferLockCountKey = new MoveTuple({ name: `${$moduleName}::TransferLockCountKey`, fields: [bcs.bool()] });
 export const LpRewardMutation = new MoveStruct({ name: `${$moduleName}::LpRewardMutation`, fields: {
         position_id: bcs.Address,
@@ -108,6 +136,38 @@ export function id(options: IdOptions) {
         package: packageAddress,
         module: 'jitter_position',
         function: 'id',
+        arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
+    });
+}
+export interface MergeAccruedArguments {
+    source: RawTransactionArgument<string>;
+    destination: RawTransactionArgument<string>;
+    globalConfig: RawTransactionArgument<string>;
+}
+export interface MergeAccruedOptions {
+    package?: string;
+    arguments: MergeAccruedArguments | [
+        source: RawTransactionArgument<string>,
+        destination: RawTransactionArgument<string>,
+        globalConfig: RawTransactionArgument<string>
+    ];
+}
+/**
+ * Consolidate SY claims, including terminal fractions, without moving any exposure
+ * or reward ownership. Both positions must be authorized Move inputs.
+ */
+export function mergeAccrued(options: MergeAccruedOptions) {
+    const packageAddress = options.package ?? 'jitter/jitter';
+    const argumentsTypes = [
+        null,
+        null,
+        null
+    ] satisfies (string | null)[];
+    const parameterNames = ["source", "destination", "globalConfig"];
+    return (tx: Transaction) => tx.moveCall({
+        package: packageAddress,
+        module: 'jitter_position',
+        function: 'merge_accrued',
         arguments: normalizeMoveArguments(options.arguments, argumentsTypes, parameterNames),
     });
 }

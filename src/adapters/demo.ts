@@ -37,9 +37,9 @@ export const demoAdapterManifest: JitterAdapterManifest = {
     return {};
   },
 
-  addRedeemFromSy({ tx, config, burnRequest }) {
+  addRedeemFromSy({ tx, config, input }) {
     return {
-      outputCoin: addDemoRedeem(tx, config, burnRequest),
+      outputCoin: addDemoRedeem(tx, config, input),
     };
   },
 };

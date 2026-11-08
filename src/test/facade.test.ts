@@ -10,6 +10,14 @@ import {
 } from "./fakes.js";
 
 describe("createJitterSdk facade", () => {
+  test("mainnet facade enables bounded deposit dust sweep for direct deposits", async () => {
+    const config = makeTestMarketConfig({adapterKind:"scallop",demoMarketVaultObjectId:"",marketObjectId:"0x10",globalConfigObjectId:"0x11",
+      scallopAdapterPackageId:"0x101",scallopMarketVaultObjectId:"0x102",scallopProtocolPackageId:"0x103",
+      scallopMarketObjectId:"0x104",scallopVersionObjectId:"0x105",scallopMarketCoinTypeTag:"0x106::reserve::MarketCoin<0x2::sui::SUI>"});
+    const sdk = createJitterSdk({network:"mainnet"});
+    const tx = await sdk.forMarket(config).transactions.buildDepositToSyTx({senderAddress:"0x20",underlyingCoinId:"0x99",underlyingAmount:100n,minSyOut:1n,syIndex:1n<<64n});
+    expect(tx.getData().commands.filter(c=>c.MoveCall?.function === "send_funds")).toHaveLength(1);
+  });
   test("composes market and per-market services behind a small facade", async () => {
     const config = makeTestMarketConfig({
       poolObjectId: "0xpool",

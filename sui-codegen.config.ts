@@ -47,6 +47,11 @@ export default {
       path: contractPath("jitter_extensions"),
     },
     {
+      package: "jitter/jitter-referral",
+      packageName: "jitter_referral",
+      path: contractPath("jitter_referral"),
+    },
+    {
       package: "jitter/demo-adapter",
       packageName: "demo_adapter",
       path: contractPath("jitter_adapter", "demo_adapter"),
@@ -60,6 +65,11 @@ export default {
       package: "jitter/ember-adapter",
       packageName: "ember_adapter",
       path: contractPath("jitter_adapter", "ember_adapter"),
+    },
+    {
+      package: "jitter/haedal-adapter",
+      packageName: "haedal_adapter",
+      path: contractPath("jitter_adapter", "haedal_adapter"),
     },
     {
       package: "jitter/suilend-adapter",

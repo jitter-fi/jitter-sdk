@@ -9,6 +9,7 @@ import type {
 
 const JAN_1_2025 = Date.UTC(2025, 0, 1);
 const JAN_1_2026 = Date.UTC(2026, 0, 1);
+const MAR_1_2025_TIMESTAMP = Math.floor(Date.UTC(2025, 2, 1) / 1000);
 
 function marketConfig(
   overrides: Partial<JitterMarketConfig> = {},
@@ -91,6 +92,7 @@ describe("buildJitterMarketOverview", () => {
     expect(market.protocol).toBe("Scallop");
     expect(market.maturity).toBe("Jan 1, 2026");
     expect(market.maturityTimestamp).toBe(Math.floor(JAN_1_2026 / 1000));
+    expect(market.startTimestamp).toBeUndefined();
     expect(market.liquidity).toBe(2);
     expect(market.tvl).toBe(2);
     expect(market.volume24h).toBe(0.25);
@@ -119,6 +121,28 @@ describe("buildJitterMarketOverview", () => {
     expect(market.searchText).toContain("jitter");
     expect(market.searchText).toContain("0xmarket");
     expect(market.jitterConfig).toEqual(config);
+  });
+
+  test("uses configured market start timestamp when present", () => {
+    const market = buildJitterMarketOverview({
+      config: marketConfig({
+        startTimestamp: MAR_1_2025_TIMESTAMP,
+      }),
+      tradeReady: true,
+      pool: poolFields(),
+      pyState: pyStateFields(),
+      volume: {
+        volume24hSy: 0n,
+        volume7dSy: 0n,
+        totalFeesSy: 0n,
+        swapCount24h: 0,
+        swapCount7d: 0,
+      },
+      underlyingApy: 0.08,
+      nowMs: JAN_1_2025,
+    });
+
+    expect(market.startTimestamp).toBe(MAR_1_2025_TIMESTAMP);
   });
 
   test("preserves configured accounting decimals on market overviews", () => {

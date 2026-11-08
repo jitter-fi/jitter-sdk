@@ -2,6 +2,8 @@ import { bcs } from "@mysten/sui/bcs";
 import { SuiGraphQLClient } from "@mysten/sui/graphql";
 import { SuiGrpcClient } from "@mysten/sui/grpc";
 
+import { normalizeSuiGrpcPageSize } from "./infrastructure/sui-grpc-pagination.js";
+
 export type GrpcNetworkKind = "mainnet" | "testnet" | "devnet";
 
 const GRPC_URLS: Record<GrpcNetworkKind, string> = {
@@ -11,7 +13,7 @@ const GRPC_URLS: Record<GrpcNetworkKind, string> = {
 };
 
 const GRAPHQL_URLS: Record<GrpcNetworkKind, string> = {
-  mainnet: "https://sui-mainnet.mystenlabs.com/graphql",
+  mainnet: "https://graphql.mainnet.sui.io/graphql",
   testnet: "https://graphql.testnet.sui.io/graphql",
   devnet: "https://graphql.devnet.sui.io/graphql",
 };
@@ -73,6 +75,10 @@ export function getSuiGrpcClient(network: GrpcNetworkKind): SuiGrpcClient {
   return client;
 }
 
+export function getSuiGraphQLUrl(network: GrpcNetworkKind): string {
+  return GRAPHQL_URLS[network];
+}
+
 export function getSuiGraphQLClient(
   network: GrpcNetworkKind,
 ): SuiGraphQLClient {
@@ -81,7 +87,7 @@ export function getSuiGraphQLClient(
 
   const client = new SuiGraphQLClient({
     network,
-    url: GRAPHQL_URLS[network],
+    url: getSuiGraphQLUrl(network),
   });
   graphqlClients.set(network, client);
   return client;
@@ -144,7 +150,12 @@ function serializeDynamicFieldName(name: {
   type: string;
   value: string;
 }): Uint8Array {
-  if (name.type === "address" || name.type === "0x2::object::ID") {
+  if (
+    name.type === "address"
+    || name.type === "0x2::object::ID"
+    || name.type.endsWith("::YtReferralRecordKey")
+    || name.type.endsWith("::LpReferralRecordKey")
+  ) {
     return bcs.Address.serialize(name.value).toBytes();
   }
 
@@ -164,13 +175,9 @@ async function queryEvents(
     throw new Error("Only MoveEventType event queries are supported.");
   }
 
-  const limit = Math.min(input.limit ?? 50, 100);
+  const limit = normalizeSuiGrpcPageSize(input.limit);
   const descending = input.order !== "ascending";
-  try {
-    return await queryEventsGraphQL(network, eventType, limit, descending);
-  } catch {
-    return queryEventsJsonRpc(network, eventType, limit, descending);
-  }
+  return queryEventsGraphQL(network, eventType, limit, descending);
 }
 
 async function queryEventsGraphQL(
@@ -246,67 +253,15 @@ async function queryEventsGraphQL(
   };
 }
 
-async function queryEventsJsonRpc(
-  network: GrpcNetworkKind,
-  eventType: string,
-  limit: number,
-  descending: boolean,
-): Promise<SuiEventResponse> {
-  const response = await fetch(GRPC_URLS[network], {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "suix_queryEvents",
-      params: [{ MoveEventType: eventType }, null, limit, descending],
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Sui event JSON-RPC failed with HTTP ${response.status}`);
-  }
-
-  const json = (await response.json()) as {
-    result?: {
-      data?: Array<{
-        id?: { txDigest?: string; eventSeq?: string };
-        parsedJson?: unknown;
-        sender?: string;
-        timestampMs?: string;
-        type?: string;
-      }>;
-    };
-    error?: { message?: string };
-  };
-
-  if (json.error) {
-    throw new Error(json.error.message ?? "Sui event JSON-RPC failed");
-  }
-
-  return {
-    data: (json.result?.data ?? []).map((event) => ({
-      id: {
-        txDigest: event.id?.txDigest ?? "",
-        eventSeq: event.id?.eventSeq ?? "",
-      },
-      parsedJson: event.parsedJson ?? {},
-      sender: event.sender,
-      timestampMs: event.timestampMs,
-      type: event.type ?? eventType,
-    })),
-  };
-}
-
 export async function grpcRequest<T>(
   network: GrpcNetworkKind,
-  method: string,
+  operation: string,
   params: unknown[],
 ): Promise<T> {
   const client = getSuiGrpcClient(network);
 
-  switch (method) {
-    case "suix_getOwnedObjects": {
+  switch (operation) {
+    case "listOwnedObjects": {
       const [owner, query, cursor, limit] = params as [
         string,
         { filter?: unknown; options?: unknown } | undefined,
@@ -327,7 +282,7 @@ export async function grpcRequest<T>(
         owner,
         type: typeFilter ?? undefined,
         cursor,
-        limit,
+        limit: normalizeSuiGrpcPageSize(limit),
         include: {
           json: Boolean(options.showContent),
           previousTransaction: Boolean(options.showPreviousTransaction),
@@ -348,13 +303,13 @@ export async function grpcRequest<T>(
       } as T;
     }
 
-    case "suix_getBalance": {
+    case "getBalance": {
       const [owner, coinType] = params as [string, string];
       const response = await client.getBalance({ owner, coinType });
       return response as T;
     }
 
-    case "sui_getObject": {
+    case "getObject": {
       const [id, options] = params as [string, unknown | undefined];
       const opts = (options ?? {}) as Record<string, unknown>;
       const include = {
@@ -376,7 +331,7 @@ export async function grpcRequest<T>(
       } as T;
     }
 
-    case "suix_getDynamicFields": {
+    case "listDynamicFields": {
       const [parentId, cursor, limit] = params as [
         string,
         string | null | undefined,
@@ -386,7 +341,7 @@ export async function grpcRequest<T>(
       const response = await client.listDynamicFields({
         parentId,
         cursor,
-        limit,
+        limit: normalizeSuiGrpcPageSize(limit),
       });
 
       return {
@@ -399,7 +354,7 @@ export async function grpcRequest<T>(
       } as T;
     }
 
-    case "sui_getTransactionBlock": {
+    case "getTransaction": {
       const [digest, options] = params as [string, unknown | undefined];
       const opts = (options ?? {}) as Record<string, unknown>;
       const include = {
@@ -437,6 +392,6 @@ export async function grpcRequest<T>(
     }
 
     default:
-      throw new Error(`Unsupported gRPC compatibility method: ${method}`);
+      throw new Error(`Unsupported gRPC operation: ${operation}`);
   }
 }

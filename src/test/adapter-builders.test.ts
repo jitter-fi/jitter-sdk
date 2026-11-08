@@ -10,8 +10,13 @@ import {
   addEmberDepositFromUnderlying,
   addEmberRedeemToWithdrawalRequest,
   addNaviPriceInfo,
+  addNaviOracleRefresh,
+  addNaviDeposit,
+  addNaviRedeem,
   addNaviRedeemV2,
+  addSuilendPriceInfo,
   addSuilendRedeem,
+  addSuilendDeposit,
 } from "../index.js";
 import type { JitterMarketConfig } from "../types.js";
 
@@ -40,6 +45,7 @@ const config = {
   emberProtocolConfigObjectId: objectId("42"),
   suilendMarketVaultObjectId: objectId("12"),
   suilendReserveObjectId: objectId("13"),
+  suilendLendingMarketObjectId: objectId("43"),
   naviMarketVaultObjectId: objectId("14"),
   naviStorageObjectId: objectId("15"),
   naviPoolObjectId: objectId("16"),
@@ -56,6 +62,37 @@ const config = {
 } satisfies JitterMarketConfig;
 
 describe("adapter builders", () => {
+  test("NAVI refresh uses v3 and composes before the single redemption entry", () => {
+    const tx = new Transaction();
+    addNaviOracleRefresh(tx, {
+      packageId: objectId("50"), oracleConfigObjectId: objectId("51"),
+      priceOracleObjectId: config.naviOracleObjectId, supraOracleHolderObjectId: objectId("52"),
+      pythPriceInfoObjectId: objectId("53"), switchboardAggregatorObjectId: objectId("54"), feedId: objectId("55"),
+    });
+    addNaviRedeem(tx, config, tx.object(objectId("33")));
+    const calls = tx.getData().commands.map((command) => command.MoveCall!);
+    expect(calls.map((call) => call.function)).toEqual(["update_single_price_v3", "redeem"]);
+    expect(calls[0].arguments).toHaveLength(7);
+  });
+
+  test("NAVI deposit uses the bound v2 and v3 objects in ABI order", () => {
+    const tx = new Transaction();
+    addNaviDeposit(tx, config, tx.object(objectId("30")), tx.object(objectId("31")));
+    const data = tx.getData();
+    const call = data.commands[0].MoveCall!;
+    expect(call.arguments).toHaveLength(11);
+    for (const [index, expected] of [[8, config.naviIncentiveV2ObjectId], [9, config.naviIncentiveV3ObjectId]] as const) {
+      expect(data.inputs[(call.arguments[index] as { Input: number }).Input].UnresolvedObject?.objectId).toBe(expected);
+    }
+  });
+
+  test("Suilend fails early when only the old embedded reserve ID is configured", () => {
+    const old = { ...config, suilendLendingMarketObjectId: undefined };
+    expect(() => addSuilendPriceInfo(new Transaction(), old)).toThrow("suilendLendingMarketObjectId");
+    const tx = new Transaction();
+    expect(() => addSuilendRedeem(tx, old, tx.object(objectId("30")))).toThrow("suilendLendingMarketObjectId");
+    expect(() => addSuilendDeposit(tx, old, tx.object(objectId("31")), tx.object(objectId("32")))).toThrow("suilendLendingMarketObjectId");
+  });
   test("price ticket builders use generated adapter module bindings", () => {
     const oracleSource = readSdkSource("oracle.ts");
 
@@ -66,7 +103,7 @@ describe("adapter builders", () => {
 
   test("ember deposit builder targets generated ember adapter module", () => {
     const calls = collectMoveCalls((tx) => {
-      addEmberDeposit(tx, config, tx.object(objectId("30")), tx.object(objectId("31")));
+      addEmberDeposit(tx, config, tx.object(objectId("30")), tx.object(objectId("31")), 100n);
     });
 
     expect(calls).toContainEqual(
@@ -84,6 +121,7 @@ describe("adapter builders", () => {
         config,
         tx.object(objectId("30")),
         tx.object(objectId("31")),
+        { maxUnderlyingIn: 100n, maxReceiptIn: 100n, minReceiptShares: 1n },
       );
     });
 
@@ -150,7 +188,7 @@ describe("adapter builders", () => {
     );
   });
 
-  test("navi redeem v2 builder targets generated navi adapter module", () => {
+  test("both NAVI builders use the single SuiSystem-aware redemption ABI", () => {
     const calls = collectMoveCalls((tx) => {
       addNaviRedeemV2(tx, config, tx.object(objectId("33")));
     });
@@ -158,9 +196,27 @@ describe("adapter builders", () => {
     expect(calls).toContainEqual(
       expect.objectContaining({
         module: "navi_market_vault",
-        function: "redeem_v2",
+        function: "redeem",
       }),
     );
+    const tx = new Transaction();
+    addNaviRedeem(tx, config, tx.object(objectId("33")));
+    const data = tx.getData();
+    const call = data.commands[0].MoveCall!;
+    expect(call.arguments).toHaveLength(12);
+    expect(data.inputs[(call.arguments[10] as { Input: number }).Input].UnresolvedObject?.objectId)
+      .toBe(config.naviSuiSystemStateObjectId);
+  });
+
+  test("Suilend quote and redemption pass the parent lending market, never the embedded reserve", () => {
+    for (const build of [addSuilendPriceInfo, (tx: Transaction, cfg: JitterMarketConfig) =>
+      addSuilendRedeem(tx, cfg, tx.object(objectId("32")))]) {
+      const tx = new Transaction();
+      build(tx, config);
+      const ids = tx.getData().inputs.map((input) => input.UnresolvedObject?.objectId);
+      expect(ids).toContain(config.suilendLendingMarketObjectId);
+      expect(ids).not.toContain(config.suilendReserveObjectId);
+    }
   });
 
   test("navi price builder targets generated navi oracle module", () => {

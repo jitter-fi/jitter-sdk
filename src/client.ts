@@ -27,6 +27,10 @@ import {
 
 import { FP64_ONE, SUI_CLOCK_ID, SUI_TYPE_TAG } from "./constants.js";
 import { addDemoPriceInfo, addScallopPriceInfo } from "./oracle.js";
+import { addHaedalPriceInfo, addHaedalStake, addHaedalMintReceiptToSy } from "./adapters/haedal.js";
+import {addEmberMintReceiptToSy} from './adapters/ember.js';
+import {addEmberMintReceiptFromUnderlying} from './sy.js';
+import {addEmberPriceInfo} from './oracle.js';
 import {
   addClaimYtInterest,
   addCreatePosition,
@@ -63,6 +67,9 @@ import {
 } from "./orderbook.js";
 import {
   addClaimLpPointsWithLiquidlinkPoints,
+  addSettleYtRewardOperationWithLiquidlinkPoints,
+  addSettleLpRewardOperationWithLiquidlinkPoints,
+  addSettlePoolRewardOperationWithLiquidlinkPoints,
   addClaimYtInterestWithLiquidlinkPoints,
   addHybridSwapPtForSyWithLiquidlinkPoints,
   addHybridSwapSyForPtWithLiquidlinkPoints,
@@ -108,15 +115,15 @@ import {
   getUserCoins,
   getUserSyCoins,
   getUserUnderlyingCoins,
-  queryMarketStateCreatedEvents,
-  queryMarketStateReserveFeeCollectedEvents,
-  queryMarketStateTreasuryInterestCollectedEvents,
+  queryMarketCreatedEvents,
+  queryMarketReserveFeeCollectedEvents,
+  queryMarketTreasuryInterestCollectedEvents,
   queryPoolCreatedEvents,
   queryPyStateCreatedEvents,
   querySwapEventsForConfig,
-  type MarketStateCreatedEvent,
-  type MarketStateReserveFeeCollectedEvent,
-  type MarketStateTreasuryInterestCollectedEvent,
+  type MarketCreatedEvent,
+  type MarketReserveFeeCollectedEvent,
+  type MarketTreasuryInterestCollectedEvent,
   type PoolCreatedEvent,
   type PoolImpliedRatePoint,
   type PyStateCreatedEvent,
@@ -626,13 +633,13 @@ export type CollectTreasuryInterestByAdminParams = {
   syIndex?: bigint;
 };
 
-export type MarketStateReserveFeeCollectedHistoryEntry = MarketStateReserveFeeCollectedEvent & {
+export type MarketReserveFeeCollectedHistoryEntry = MarketReserveFeeCollectedEvent & {
   timestampMs: number;
   digest: string;
 };
 
-export type MarketStateTreasuryInterestCollectedHistoryEntry =
-  MarketStateTreasuryInterestCollectedEvent & {
+export type MarketTreasuryInterestCollectedHistoryEntry =
+  MarketTreasuryInterestCollectedEvent & {
     timestampMs: number;
     digest: string;
   };
@@ -989,7 +996,7 @@ export class JitterClient {
     recipient: string,
   ): void {
     tx.moveCall({
-      target: `${this.config.jitterPackageId}::router::transfer_position`,
+      target: `${this.config.jitterPackageId}::router::transfer_empty_position`,
       arguments: [position, tx.pure.address(recipient)],
     });
   }
@@ -2134,13 +2141,12 @@ export class JitterClient {
       priceInfoForSwap,
       p.pyPositionId,
     );
-    const priceInfoForBurn = this.hasScallopRouteConfigured()
-      ? addScallopPriceInfo(tx, this.config)
-      : addDemoPriceInfo(tx, this.config, syIndex);
-    const burnRequest = addBurnSyExactIn(tx, this.config, priceInfoForBurn, syCoin);
+    const redeemInput = this.hasScallopRouteConfigured()
+      ? syCoin
+      : addBurnSyExactIn(tx, this.config, addDemoPriceInfo(tx, this.config, syIndex), syCoin);
     const underlyingCoin = this.hasScallopRouteConfigured()
-      ? addScallopRedeemToUnderlying(tx, this.config, burnRequest, 0n)
-      : addDemoRedeem(tx, this.config, burnRequest);
+      ? addScallopRedeemToUnderlying(tx, this.config, redeemInput, 0n)
+      : addDemoRedeem(tx, this.config, redeemInput);
     tx.transferObjects([underlyingCoin], tx.pure.address(p.senderAddress));
     return tx;
   }
@@ -2496,6 +2502,125 @@ export class JitterClient {
     return tx;
   }
 
+  /** First LP only: one atomic deposit, actual 50/50 SY split, PY mint and Admin initialization.
+   * Requires an empty pool. Configured point rewarders register YT/LP atomically; unknown rewarders fail closed on chain.
+   */
+  buildInitializeScallopLiquidityTx(p: {
+    underlyingAmount: bigint; minLpOut: bigint; deadlineMs: bigint;
+    adminCapId: string; senderAddress: string;
+  }): Transaction {
+    return this.buildInitializeAdapterLiquidityTx(p, "scallop");
+  }
+
+  /** First LP: stake SUI, mint from actual haSUI, split actual SY 50/50 and retain YT/LP in Admin's position. */
+  buildInitializeHaedalLiquidityTx(p: {
+    underlyingAmount: bigint; minLpOut: bigint; deadlineMs: bigint;
+    adminCapId: string; senderAddress: string;
+  }): Transaction {
+    return this.buildInitializeAdapterLiquidityTx(p, "haedal");
+  }
+
+  buildInitializeEmberLiquidityTx(p: {underlyingAmount:bigint;minLpOut:bigint;deadlineMs:bigint;adminCapId:string;senderAddress:string}):Transaction {
+    return this.buildInitializeAdapterLiquidityTx(p,'ember');
+  }
+
+  private buildInitializeAdapterLiquidityTx(p: {
+    underlyingAmount: bigint; minLpOut: bigint; deadlineMs: bigint;
+    adminCapId: string; senderAddress: string;
+  }, kind: "scallop" | "haedal" | "ember"): Transaction {
+    const max = (1n << 64n) - 1n;
+    for (const value of [p.underlyingAmount, p.minLpOut, p.deadlineMs]) {
+      if (typeof value !== "bigint" || value <= 0n || value > max) throw new Error('Initial liquidity requires positive u64 amounts and deadline.');
+    }
+    if (!this.config.globalConfigObjectId || !this.config.rewardDistributorObjectId)
+      throw new Error("Initial liquidity requires GlobalConfig and RewardDistributor.");
+    const ll = this.config.liquidlink;
+    const withPoints = Boolean(ll?.enabled);
+    if (ll?.closed || ll?.pointPrograms?.some(program => program.closed || program.referral))
+      throw new Error('Initial liquidity requires active, non-referral point programs.');
+    if (withPoints && (!this.config.jitterExtensionsPackageId || !ll?.liquidlinkPackageId || !ll.liquidlinkGlobalConfigObjectId
+      || (ll.pointPrograms?.length ? ll.pointPrograms.some(program => program.enabled === false || !program.lpPointStateObjectId
+        || !program.projectObjectId || !program.scoreboardObjectId || !program.pointConfigObjectId
+        || (program.scopes && ['yt','lp','pool'].some(scope => !program.scopes!.includes(scope as 'yt' | 'lp' | 'pool'))))
+        : !ll.pointConfigObjectId || !ll.lpPointStateObjectId || !ll.projectObjectId || !ll.scoreboardObjectId)))
+      throw new Error('Initial liquidity requires complete YT, LP and pool point configuration.');
+    const tx = this.newTx(p.senderAddress);
+    const position = addCreatePosition(tx, this.config);
+    const priceInfo = () => kind === 'ember' ? addEmberPriceInfo(tx,this.config) : kind === "haedal" ? addHaedalPriceInfo(tx, this.config) : addScallopPriceInfo(tx, this.config);
+    let syCoin: TransactionObjectArgument, receiptChange: TransactionObjectArgument;
+    if(kind==='ember'){
+      const receipt=addEmberMintReceiptFromUnderlying(tx,this.config,this.createCoinWithBalance(p.underlyingAmount),1n);
+      ({syCoin,receiptChange}=addEmberMintReceiptToSy(tx,this.config,receipt,1n));
+    } else if (kind === "haedal") {
+      const receipt = addHaedalStake(tx, this.config, this.createCoinWithBalance(p.underlyingAmount));
+      ({ syCoin, receiptChange } = addHaedalMintReceiptToSy(tx, this.config, receipt, 1n));
+    } else {
+      this.assertScallopRouteConfigured();
+      const minted = addMintSyExactIn(tx, this.config, priceInfo(), p.underlyingAmount);
+      syCoin = minted[0];
+      receiptChange = addScallopDepositFromUnderlying(tx, this.config, minted[1], this.createCoinWithBalance(p.underlyingAmount), p.underlyingAmount);
+    }
+    // Split the actual minted coin, never a stale off-chain estimate. Any odd raw unit remains on the pool side.
+    const halves = tx.moveCall({target: '0x2::coin::divide_into_n', typeArguments: [this.config.syTypeTag], arguments: [syCoin, tx.pure.u64(2)]});
+    const pyCoin = tx.moveCall({target: '0x1::vector::pop_back', typeArguments: [`0x2::coin::Coin<${this.config.syTypeTag}>`], arguments: [halves]});
+    tx.moveCall({target: '0x1::vector::destroy_empty', typeArguments: [`0x2::coin::Coin<${this.config.syTypeTag}>`], arguments: [halves]});
+    const core = this.config.jitterPackageId;
+    const global = tx.object(this.config.globalConfigObjectId!);
+    const distributor = tx.object(this.config.rewardDistributorObjectId!);
+    const settle = (operation: TransactionArgument, scope: 'yt' | 'lp' | 'pool') => {
+      if (!withPoints) return;
+      if (scope === 'yt') addSettleYtRewardOperationWithLiquidlinkPoints(tx, this.config, operation, position);
+      else if (scope === 'lp') addSettleLpRewardOperationWithLiquidlinkPoints(tx, this.config, operation, position);
+      else addSettlePoolRewardOperationWithLiquidlinkPoints(tx, this.config, operation);
+    };
+    const proof = (scope: 'yt' | 'lp' | 'pool', transfer: boolean) => {
+      const scoped = tx.moveCall({target: `${core}::reward_distributor::${scope}_scope`, arguments: []});
+      const poolArgs = [tx.object(this.config.marketObjectId)];
+      const types = [this.config.syTypeTag, this.config.ptTypeTag, this.config.ytTypeTag];
+      const subject = scope === 'pool' ? tx.pure.id(this.config.marketObjectId) : tx.moveCall({target: `${core}::jitter_position::id`, arguments: [position]});
+      const exposure = scope === 'pool' ? tx.moveCall({target: `${core}::market::total_pool_sy`, arguments: poolArgs, typeArguments: types}) : tx.moveCall({target: `${core}::jitter_position::${scope === 'yt' ? 'yt_balance' : 'lp_amount'}`, arguments: [position]});
+      const guard = scope === 'pool' ? tx.moveCall({target: `${core}::market::pool_reward_guard`, arguments: poolArgs, typeArguments: types}) : tx.moveCall({target: `${core}::jitter_position::${scope}_reward_guard`, arguments: [position]});
+      const args = [distributor, global, scoped, tx.pure.address(scope === 'pool' ? '0x0' : p.senderAddress), ...(transfer ? [tx.pure.address(p.senderAddress)] : []), subject, exposure, guard];
+      const operation = tx.moveCall({target: `${core}::reward_distributor::${transfer ? 'begin_transfer_operation' : 'begin_scoped_operation_with_guard'}`, arguments: args});
+      settle(operation, scope);
+      return tx.moveCall({target: `${core}::reward_distributor::finish_operation`, arguments: [global, operation]});
+    };
+    const settlements = (settlement: TransactionObjectArgument) => tx.makeMoveVec({type: `${core}::reward_distributor::RewardSettlement`, elements: [settlement]});
+    const mint = tx.moveCall({target: `${core}::router::mint_py`, typeArguments: [this.config.syTypeTag, this.config.ptTypeTag, this.config.ytTypeTag], arguments: [settlements(proof('yt', false)), distributor, pyCoin, priceInfo(), position, tx.object(this.config.marketObjectId), global, tx.object.clock()]});
+    const pt = mint[0];
+    // Even zero-rewarder distributors issue mutation proofs. Consume the post-mint hot potato explicitly.
+    const postMint = tx.moveCall({target: '0x1::vector::pop_back', typeArguments: [`${core}::reward_distributor::RewardOperation`], arguments: [mint[1]]});
+    settle(postMint, 'yt');
+    const postSettlement = tx.moveCall({target: `${core}::reward_distributor::finish_operation`, arguments: [global, postMint]});
+    tx.moveCall({target: `${core}::reward_distributor::destroy_settlement`, arguments: [global, postSettlement]});
+    tx.moveCall({target: '0x1::vector::destroy_empty', typeArguments: [`${core}::reward_distributor::RewardOperation`], arguments: [mint[1]]});
+    const empty = () => tx.makeMoveVec({type: `${this.config.jitterPackageId}::reward_distributor::RewardSettlement`, elements: []});
+    const initialized = tx.moveCall({
+      target: `${this.config.jitterPackageId}::router::initialize_pool_by_admin`,
+      typeArguments: [this.config.syTypeTag, this.config.ptTypeTag, this.config.ytTypeTag],
+      arguments: [withPoints ? settlements(proof('pool', false)) : empty(), withPoints ? settlements(proof('lp', false)) : empty(), tx.object(this.config.rewardDistributorObjectId!), syCoin, pt, tx.pure.u64(p.minLpOut), tx.object(this.config.marketObjectId), position, tx.object(this.config.globalConfigObjectId!), priceInfo(), tx.pure.u64(p.deadlineMs), tx.object(p.adminCapId), tx.object.clock()],
+    });
+    // The empty vault's pre-deposit reserve is zero. Snapshot the funded reserve
+    // only on this first-LP path; ordinary deposits must not reset withdrawal limits.
+    tx.moveCall({
+      target: kind === 'ember' ? `${this.config.emberAdapterPackageId}::ember_market_vault::refresh_withdraw_circuit_breaker_by_admin` : kind === "haedal"
+        ? `${this.config.haedalAdapterPackageId}::haedal_market_vault::refresh_withdraw_circuit_breaker_by_admin`
+        : `${this.config.scallopAdapterPackageId}::scallop_market_vault::refresh_withdraw_circuit_breaker_by_admin`,
+      typeArguments: [...(kind === 'ember' ? [this.config.underlyingTypeTag,this.config.emberReceiptTypeTag!] : kind === "haedal" ? [] : [this.config.underlyingTypeTag]), this.config.syTypeTag, this.config.ptTypeTag, this.config.ytTypeTag],
+      arguments: [tx.object(p.adminCapId), global, tx.object(kind === 'ember' ? this.config.emberMarketVaultObjectId! : kind === "haedal" ? this.config.haedalMarketVaultObjectId! : this.config.scallopMarketVaultObjectId!), tx.object.clock()],
+    });
+    if (withPoints) for (const scope of ['pool', 'lp'] as const) {
+      const op = tx.moveCall({target: '0x1::vector::pop_back', typeArguments: [`${core}::reward_distributor::RewardOperation`], arguments: [initialized[3]]});
+      settle(op, scope);
+      const done = tx.moveCall({target: `${core}::reward_distributor::finish_operation`, arguments: [global, op]});
+      tx.moveCall({target: `${core}::reward_distributor::destroy_settlement`, arguments: [global, done]});
+    }
+    tx.moveCall({target: '0x1::vector::destroy_empty', typeArguments: [`${this.config.jitterPackageId}::reward_distributor::RewardOperation`], arguments: [initialized[3]]});
+    tx.moveCall({target: `${core}::router::transfer_position`, typeArguments: [this.config.syTypeTag, this.config.ptTypeTag, this.config.ytTypeTag], arguments: [settlements(proof('yt', true)), settlements(proof('lp', true)), distributor, position, tx.object(this.config.marketObjectId), global, tx.pure.address(p.senderAddress)]});
+    tx.transferObjects([receiptChange, initialized[2]], tx.pure.address(p.senderAddress));
+    return tx;
+  }
+
   // Remove liquidity; existing YT stays untouched.
   buildRemoveLiquidityTx(p: RemoveLiquidityParams): Transaction {
     const tx = this.newTx(p.senderAddress);
@@ -2532,13 +2657,12 @@ export class JitterClient {
       priceInfo1,
       p.pyPositionId,
     );
-    const priceInfo2 = this.hasScallopRouteConfigured()
-      ? addScallopPriceInfo(tx, this.config)
-      : addDemoPriceInfo(tx, this.config, syIndex);
-    const burnRequest = addBurnSyExactIn(tx, this.config, priceInfo2, syCoin);
+    const redeemInput = this.hasScallopRouteConfigured()
+      ? syCoin
+      : addBurnSyExactIn(tx, this.config, addDemoPriceInfo(tx, this.config, syIndex), syCoin);
     const underlyingCoin = this.hasScallopRouteConfigured()
-      ? addScallopRedeemToUnderlying(tx, this.config, burnRequest, 0n)
-      : addDemoRedeem(tx, this.config, burnRequest);
+      ? addScallopRedeemToUnderlying(tx, this.config, redeemInput, 0n)
+      : addDemoRedeem(tx, this.config, redeemInput);
     tx.transferObjects([underlyingCoin], tx.pure.address(p.senderAddress));
 
     return tx;
@@ -2610,16 +2734,15 @@ export class JitterClient {
 
   // M. SY → underlying
   async buildRedeemSyToUnderlyingTx(p: RedeemSyToUnderlyingParams): Promise<Transaction> {
-    const syIndex = await this.resolveSyIndex(p.syIndex);
+    const syIndex = this.hasScallopRouteConfigured() ? 0n : await this.resolveSyIndex(p.syIndex);
     const tx = this.newTx(p.senderAddress);
     const syCoin = tx.splitCoins(tx.object(p.syCoinId), [tx.pure.u64(p.syAmount)]);
-    const priceInfo = this.hasScallopRouteConfigured()
-      ? addScallopPriceInfo(tx, this.config)
-      : addDemoPriceInfo(tx, this.config, syIndex);
-    const burnRequest = addBurnSyExactIn(tx, this.config, priceInfo, syCoin);
+    const redeemInput = this.hasScallopRouteConfigured()
+      ? syCoin
+      : addBurnSyExactIn(tx, this.config, addDemoPriceInfo(tx, this.config, syIndex), syCoin);
     const underlyingCoin = this.hasScallopRouteConfigured()
-      ? addScallopRedeemToUnderlying(tx, this.config, burnRequest, 0n)
-      : addDemoRedeem(tx, this.config, burnRequest);
+      ? addScallopRedeemToUnderlying(tx, this.config, redeemInput, 0n)
+      : addDemoRedeem(tx, this.config, redeemInput);
     tx.transferObjects([underlyingCoin], tx.pure.address(p.senderAddress));
     return tx;
   }
@@ -2659,18 +2782,12 @@ export class JitterClient {
       fills,
     );
 
-    const priceInfo2 = this.hasScallopRouteConfigured()
-      ? addScallopPriceInfo(tx, this.config)
-      : addDemoPriceInfo(tx, this.config, syIndex);
-    const burnRequest = addBurnSyExactIn(
-      tx,
-      this.config,
-      priceInfo2,
-      syCoin,
-    );
+    const redeemInput = this.hasScallopRouteConfigured()
+      ? syCoin
+      : addBurnSyExactIn(tx, this.config, addDemoPriceInfo(tx, this.config, syIndex), syCoin);
     const finalUnderlyingCoin = this.hasScallopRouteConfigured()
-      ? addScallopRedeemToUnderlying(tx, this.config, burnRequest, 0n)
-      : addDemoRedeem(tx, this.config, burnRequest);
+      ? addScallopRedeemToUnderlying(tx, this.config, redeemInput, 0n)
+      : addDemoRedeem(tx, this.config, redeemInput);
     tx.transferObjects([finalUnderlyingCoin], tx.pure.address(p.senderAddress));
 
     return tx;
@@ -2844,19 +2961,19 @@ export class JitterClient {
   }
 
   /**
-   * Discover unified MarketState objects emitted by the current core package.
-   * Returns raw MarketStateCreatedEvent records from the core package.
+   * Discover unified Market objects emitted by the current core package.
+   * Returns raw MarketCreatedEvent records from the core package.
    * Frontends and indexers should prefer `jitter_registry` when available.
    */
-  discoverMarketStates(limit = 50): Promise<MarketStateCreatedEvent[]> {
-    return queryMarketStateCreatedEvents(this.network, this.config.jitterPackageId, limit);
+  discoverMarkets(limit = 50): Promise<MarketCreatedEvent[]> {
+    return queryMarketCreatedEvents(this.network, this.config.jitterPackageId, limit);
   }
 
   /**
    * @deprecated Beta split-state compatibility only.
    *
-   * New markets emit `market_state::MarketStateCreatedEvent` and should be
-   * discovered through `discoverMarketStates()` or `jitter_registry`.
+   * New markets emit `market::MarketCreatedEvent` and should be
+   * discovered through `discoverMarkets()` or `jitter_registry`.
    */
   discoverPools(limit = 50): Promise<PoolCreatedEvent[]> {
     return queryPoolCreatedEvents(this.network, this.config.jitterPackageId, limit);
@@ -2865,7 +2982,7 @@ export class JitterClient {
   /**
    * @deprecated Beta split-state compatibility only.
    *
-   * New markets use unified `MarketState` objects.
+   * New markets use unified `Market` objects.
    */
   discoverPyStates(limit = 50): Promise<PyStateCreatedEvent[]> {
     return queryPyStateCreatedEvents(this.network, this.config.jitterPackageId, limit);
@@ -2882,7 +2999,7 @@ export class JitterClient {
   /**
    * Legacy split-state ACL settlement placeholder.
    *
-   * Unified MarketState deployments currently expose AdminCap settlement only,
+   * Unified Market deployments currently expose AdminCap settlement only,
    * so this builder intentionally throws instead of constructing a stale
    * `py_state.settle` PTB.
    */
@@ -2891,7 +3008,7 @@ export class JitterClient {
   ): Promise<Transaction> {
     void p;
     throw new Error(
-      "ACL market settlement is not exposed by the MarketState router. Use buildSettleExpiredByAdminTx or add a MarketState ACL entrypoint before wiring this path.",
+      "ACL market settlement is not exposed by the Market router. Use buildSettleExpiredByAdminTx or add a Market ACL entrypoint before wiring this path.",
     );
   }
 
@@ -2912,10 +3029,10 @@ export class JitterClient {
         ? this.config.marketObjectId
         : null);
     if (!marketStateObjectId) {
-      throw new Error("MarketState settlement requires marketStateObjectId in market config.");
+      throw new Error("Market settlement requires marketStateObjectId in market config.");
     }
     if (!this.config.globalConfigObjectId) {
-      throw new Error("MarketState settlement requires globalConfigObjectId in market config.");
+      throw new Error("Market settlement requires globalConfigObjectId in market config.");
     }
     tx.moveCall({
       target: `${this.config.jitterPackageId}::router::settle_market_state_by_admin`,
@@ -3068,7 +3185,7 @@ export class JitterClient {
         });
 
     tx.moveCall({
-      target: `${this.config.jitterPackageId}::market_state::collect_treasury_interest_by_acl`,
+      target: `${this.config.jitterPackageId}::market::collect_treasury_interest_by_acl`,
       typeArguments: [
         this.config.syTypeTag,
         this.config.ptTypeTag,
@@ -3120,7 +3237,7 @@ export class JitterClient {
         });
 
     tx.moveCall({
-      target: `${this.config.jitterPackageId}::market_state::collect_treasury_interest_by_admin`,
+      target: `${this.config.jitterPackageId}::market::collect_treasury_interest_by_admin`,
       typeArguments: [
         this.config.syTypeTag,
         this.config.ptTypeTag,
@@ -3139,14 +3256,14 @@ export class JitterClient {
 
   async getReserveFeeCollectionHistory(
     limit = 100,
-  ): Promise<MarketStateReserveFeeCollectedHistoryEntry[]> {
-    return queryMarketStateReserveFeeCollectedEvents(this.network, this.config, limit);
+  ): Promise<MarketReserveFeeCollectedHistoryEntry[]> {
+    return queryMarketReserveFeeCollectedEvents(this.network, this.config, limit);
   }
 
   async getTreasuryInterestCollectionHistory(
     limit = 100,
-  ): Promise<MarketStateTreasuryInterestCollectedHistoryEntry[]> {
-    return queryMarketStateTreasuryInterestCollectedEvents(
+  ): Promise<MarketTreasuryInterestCollectedHistoryEntry[]> {
+    return queryMarketTreasuryInterestCollectedEvents(
       this.network,
       this.config,
       limit,

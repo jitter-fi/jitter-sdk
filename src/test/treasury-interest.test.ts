@@ -7,7 +7,7 @@ import { getDefaultJitterMarketConfig } from "../config.js";
 
 const senderAddress = objectId("aa");
 
-describe("MarketState treasury interest builders", () => {
+describe("Market treasury interest builders", () => {
   test("admin settlement-index route uses Option::none and cannot redirect funds", async () => {
     const client = JitterClient.fromConfig("testnet", getTestConfig());
     const tx = await client.buildCollectTreasuryInterestByAdminTx({
@@ -20,14 +20,14 @@ describe("MarketState treasury interest builders", () => {
       expect.arrayContaining([
         expect.objectContaining({ module: "option", function: "none" }),
         expect.objectContaining({
-          module: "market_state",
+          module: "market",
           function: "collect_treasury_interest_by_admin",
         }),
       ]),
     );
     expect(collectCommandKinds(tx)).not.toContain("TransferObjects");
     expect(
-      findMoveCall(tx, "market_state", "collect_treasury_interest_by_admin")?.arguments,
+      findMoveCall(tx, "market", "collect_treasury_interest_by_admin")?.arguments,
     ).toHaveLength(5);
   });
 
@@ -43,14 +43,14 @@ describe("MarketState treasury interest builders", () => {
         expect.objectContaining({ module: "demo_price_ticket", function: "quote" }),
         expect.objectContaining({ module: "option", function: "some" }),
         expect.objectContaining({
-          module: "market_state",
+          module: "market",
           function: "collect_treasury_interest_by_acl",
         }),
       ]),
     );
     expect(collectCommandKinds(tx)).not.toContain("TransferObjects");
     expect(
-      findMoveCall(tx, "market_state", "collect_treasury_interest_by_acl")?.arguments,
+      findMoveCall(tx, "market", "collect_treasury_interest_by_acl")?.arguments,
     ).toHaveLength(5);
   });
 });

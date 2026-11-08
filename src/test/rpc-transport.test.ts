@@ -3,6 +3,8 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { getSuiGraphQLUrl } from "../rpc.js";
+
 const SDK_SRC_DIR = fileURLToPath(new URL("../", import.meta.url));
 
 async function listTypeScriptFiles(dir: string): Promise<string[]> {
@@ -22,6 +24,12 @@ async function listTypeScriptFiles(dir: string): Promise<string[]> {
 }
 
 describe("Sui RPC transport policy", () => {
+  test("uses the current Sui GraphQL endpoint for mainnet", () => {
+    expect(getSuiGraphQLUrl("mainnet")).toBe(
+      "https://graphql.mainnet.sui.io/graphql",
+    );
+  });
+
   test("does not use legacy JSON RPC SDK APIs", async () => {
     const forbidden = [
       "@mysten/sui/jsonRpc",

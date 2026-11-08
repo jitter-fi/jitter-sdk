@@ -29,6 +29,8 @@ describe("frontend public API characterization", () => {
     expect(typeof sdk.getPoolApyHistory).toBe("function");
     expect(typeof sdk.getUnderlyingApyHistory).toBe("function");
     expect(typeof sdk.getLiquidlinkLeaderboard).toBe("function");
+    expect(typeof sdk.readJitterRewardLeaderboard).toBe("function");
+    expect(typeof sdk.readJitterRewardSummary).toBe("function");
     expect(typeof sdk.hasJitterCheckInConfig).toBe("function");
     expect(typeof sdk.addSetJitterReferralCode).toBe("function");
     expect(typeof sdk.addUseJitterReferralCode).toBe("function");
