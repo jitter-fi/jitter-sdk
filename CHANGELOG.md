@@ -53,7 +53,8 @@ credentials, frontend code or unmerged contract experiments are included.
 - Local tarball installed in an isolated consumer; package-root ESM exports and
   facade construction and consumer TypeScript compilation passed without
   network requests or signing. Archive allowlist: dist, package metadata,
-  README and changelog only (687 files; 545,645 compressed bytes).
+  README and changelog only. Obsolete generated `market_state` binding removed
+  so the complete source file set also matches the snapshot.
 - No npm publication was performed. Consumers do not need Move sources to
   install/build the SDK; maintainers need a matching `JITTER_CONTRACT_ROOT`
   checkout for contract-surface audit/code generation.
