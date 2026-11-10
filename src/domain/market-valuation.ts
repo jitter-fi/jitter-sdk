@@ -5,6 +5,8 @@ export type MarketValuationInput = {
   poolPtRaw: string;
   pySyRaw: string;
   reserveFeeSyRaw: string;
+  /** Complete adapter receipt reserve in SY accounting units; includes queued withdrawals. */
+  backingSyRaw?: string;
   volume24hSyRaw: string;
   volume7dSyRaw: string;
   totalFeesSyRaw: string;
@@ -47,7 +49,7 @@ export function valueMarketBalances(input: MarketValuationInput) {
   const liquidity = syUsd + ptUsd;
   const result = {
     liquidity,
-    tvl: syValue(sy + py + fees),
+    tvl: syValue(input.backingSyRaw === undefined ? sy + py + fees : raw(input.backingSyRaw)),
     syPrice:
       (Number(input.syIndexRaw) / Number(FP64_ONE)) *
       10 ** (input.marketDecimals - input.underlyingDecimals) *

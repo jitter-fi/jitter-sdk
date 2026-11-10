@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1 - 2026-11-10
+
+- Fix receipt-market TVL: count complete on-chain adapter backing, including
+  wallet-held SY and unpaid queued withdrawals, instead of only market-held SY.
+  Do not add the queue or AMM/PY balances a second time. AMM liquidity, LP price
+  and transaction math are unchanged.
+- Add optional `JitterChainReader.getMarketBackingSy` and
+  `MarketValuationInput.backingSyRaw`. Existing/custom readers without this
+  capability retain the legacy market-held valuation fallback; the default Sui
+  reader implements full backing for Scallop, Haedal and Ember.
+- Validate market binding, supported raw balance layouts and u64 precision;
+  failed live backing reads do not become healthy zero-TVL values.
+- Backing reads run alongside price/index reads, without a new fetch waterfall.
+- Validation: 652 SDK tests passed, nine optional live tests skipped; declaration
+  build passed. All six mainnet vault reads verified; matched-input TVL changed
+  from $3,588.63 to $4,596.42 while liquidity was unchanged (point-in-time prices,
+  not a promised live total or an exact cross-provider price reconciliation).
+- No npm publication or contract upgrade is implied by this repository update.
+
 ## 0.2.0 - 2026-11-08
 
 ### Source And Scope

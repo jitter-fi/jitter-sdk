@@ -1,6 +1,6 @@
 {
   "name": "@jitter/sdk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "TypeScript SDK for Jitter markets on Sui.",
   "type": "module",
   "main": "./dist/index.js",

@@ -52,6 +52,8 @@ export interface JitterChainReader {
   getObject<TFields>(objectId: string): Promise<TFields>;
   getPoolState(config: JitterMarketConfig): Promise<PoolFields>;
   getPyState(config: JitterMarketConfig): Promise<PyStateFields>;
+  /** Full receipt backing, including external SY and unpaid queued withdrawals; null for unsupported adapters. */
+  getMarketBackingSy?(config: JitterMarketConfig): Promise<bigint | null>;
   getPoolVolumeStats?(
     config: JitterMarketConfig,
   ): Promise<PoolVolumeStatsSnapshot>;

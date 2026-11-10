@@ -24,6 +24,20 @@ test("pool liquidity values both reserves; backing TVL includes PY and fees, not
   expect(r.volume7d).toBe(6);
   expect(r.totalFees).toBe(0.1);
 });
+
+test("complete receipt backing includes wallet-held SY without inflating AMM liquidity", () => {
+  const result = valueMarketBalances({ ...quote, backingSyRaw: "1101000000" });
+  expect(result.tvl).toBe(1101);
+  expect(result.liquidity).toBe(56);
+  expect(valueMarketBalances({ ...quote, backingSyRaw: "0" }).tvl).toBe(0);
+});
+
+test("receipt backing already contains queued withdrawals and is not added to market reserves", () => {
+  const result = valueMarketBalances({ ...quote, backingSyRaw: "102000000" });
+  expect(result.tvl).toBe(102);
+  expect(() => valueMarketBalances({ ...quote, backingSyRaw: "-1" })).toThrow();
+  expect(() => valueMarketBalances({ ...quote, backingSyRaw: "NaN" })).toThrow();
+});
 test("nine-decimal balances and differing underlying decimals preserve asset units", () => {
   expect(
     valueMarketBalances({ ...quote, marketDecimals: 9, underlyingDecimals: 9 })
