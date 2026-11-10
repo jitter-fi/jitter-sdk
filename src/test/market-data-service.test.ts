@@ -144,6 +144,15 @@ describe("JitterMarketDataService", () => {
     expect(market.lpBreakdown.syWeight).toBeCloseTo(1 / 3);
     expect(market.longYieldApy).toBeCloseTo(0.05);
     expect(market.ytRoi).toBeCloseTo(0.05);
+    const completeBacking = createJitterMarketDataService({
+      ...options,
+      chainReader: Object.assign(chainReader, { getMarketBackingSy: async () => 1_101_000_000n }),
+      getUnderlyingPriceUsd: () => 0.5,
+    });
+    const complete = (await completeBacking.getExplorerData({ nowMs: JAN_1_2025 })).markets[0];
+    expect(complete.tvl).toBe(1101);
+    expect(complete.liquidity).toBe(market.liquidity);
+    expect(complete.lpPrice).toBe(market.lpPrice);
     const missing = createJitterMarketDataService({
       ...options,
       getUnderlyingPriceUsd: () => null,

@@ -18,6 +18,7 @@ import type {
   PoolFields,
   PyStateFields,
 } from "../types.js";
+import { normalizeSuiAddress } from "@mysten/sui/utils";
 
 export type SuiJitterChainReaderDelegates = {
   getObjectInfo?: <T>(
@@ -63,6 +64,25 @@ export class SuiJitterChainReader implements JitterChainReader {
     private readonly network: GrpcNetworkKind,
     private readonly delegates: SuiJitterChainReaderDelegates = {},
   ) {}
+
+  async getMarketBackingSy(config: JitterMarketConfig): Promise<bigint | null> {
+    const vaultId = config.scallopMarketVaultObjectId ?? config.haedalMarketVaultObjectId ?? config.emberMarketVaultObjectId;
+    if (!vaultId) return null;
+    const fields = await this.getObject<Record<string, unknown>>(vaultId);
+    const boundMarket = fields.market_id;
+    const marketId = typeof boundMarket === "string" ? boundMarket : (boundMarket as { id?: string } | undefined)?.id;
+    if (!marketId || normalizeSuiAddress(marketId) !== normalizeSuiAddress(config.marketObjectId)) throw Error("Receipt vault market mismatch");
+    const balance = fields[config.scallopMarketVaultObjectId ? "market_coin_balance" : "receipt_balance"];
+    const nested = balance && typeof balance === "object" ? balance as { value?: unknown; fields?: { value?: unknown } } : null;
+    const raw = nested ? nested.value ?? nested.fields?.value : balance;
+    if ((typeof raw !== "string" && typeof raw !== "bigint" && typeof raw !== "number") ||
+        (typeof raw === "number" && !Number.isSafeInteger(raw)) || !/^\d+$/.test(String(raw))) throw Error("Invalid receipt backing");
+    const amount = BigInt(raw);
+    if (amount > (1n << 64n) - 1n) throw Error("Receipt backing exceeds u64");
+    // These adapters mint one raw SY per raw receipt unit. Queued claims stay in
+    // the vault until paid, so neither add the queue nor add market-held SY again.
+    return amount;
+  }
 
   getObjectInfo<T>(objectId: string): Promise<ChainObjectInfo<T>> {
     return (this.delegates.getObjectInfo ?? defaultGetObjectInfo)<T>(

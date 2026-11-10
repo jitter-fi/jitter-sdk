@@ -692,7 +692,7 @@ async function hydrateDisplayMarketOverview(
   );
 }
 
-type LiveReceiptPrices = { usd: number; index: bigint };
+type LiveReceiptPrices = { usd: number; index: bigint; backingSyRaw?: string };
 
 function usesLiveReceiptPrices(config: JitterMarketConfig): boolean {
   return Boolean(
@@ -709,7 +709,7 @@ async function getLiveReceiptPrices(
   if (!usesLiveReceiptPrices(config)) return null;
   const network = options.network === "mainnet" ? "mainnet" : "testnet";
   try {
-    const [usd, index] = await Promise.all([
+    const [usd, index, backing] = await Promise.all([
       Promise.resolve().then(() => options.getUnderlyingPriceUsd?.(config) ?? config.underlyingPriceUsd),
       Promise.resolve().then(async () => options.resolveSyIndex
         ? options.resolveSyIndex(config)
@@ -720,9 +720,10 @@ async function getLiveReceiptPrices(
             : config.scallopMarketVaultObjectId && config.scallopMarketObjectId
               ? BigInt((await getScallopMarketIndex(network, config)).syIndexRaw)
               : undefined),
+      options.chainReader.getMarketBackingSy?.(config),
     ]);
     return typeof usd === "number" && Number.isFinite(usd) && usd > 0 && index !== undefined && index > 0n
-      ? { usd, index }
+      ? { usd, index, backingSyRaw: backing == null ? undefined : backing.toString() }
       : null;
   } catch {
     return null;
@@ -771,6 +772,7 @@ function withLiveReceiptPrices(
       poolPtRaw: pool.total_pt,
       pySyRaw: py.sy_balance,
       reserveFeeSyRaw: py.reserve_fee_balance ?? "0",
+      backingSyRaw: prices.backingSyRaw,
       volume24hSyRaw: analytics?.volume24h.raw ?? String(volume.volume24hSy),
       volume7dSyRaw: analytics?.volume7d.raw ?? String(volume.volume7dSy),
       totalFeesSyRaw: String(volume.totalFeesSy),
